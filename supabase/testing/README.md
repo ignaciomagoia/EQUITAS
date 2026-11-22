@@ -10,7 +10,9 @@ estos archivos, en este orden, desde el SQL Editor del proyecto de Testing:
 
 1. `supabase/testing/diagnostico_lafalda_apply_fixture.sql` (solo lectura).
 2. Si no faltan tablas o RPCs, `supabase/testing/lafalda_apply_fixture_catalogs.sql`.
-3. `supabase/testing/lafalda_apply_fixture.sql`.
+3. `supabase/testing/diagnostico_debt_id_generation.sql` (solo lectura).
+4. Si el diagnóstico indica `SIN_GENERADOR`, `supabase/testing/lafalda_apply_fixture_debt_identity.sql`.
+5. `supabase/testing/lafalda_apply_fixture.sql`.
 
 El segundo archivo solo agrega, si faltan, el bucket privado y catalogos
 sinteticos exclusivos del fixture. No actualiza ni elimina registros existentes.
@@ -27,7 +29,8 @@ En el SQL Editor de un proyecto nuevo y sin tablas de negocio en `public`, ejecu
 4. `supabase/migrations/20261121190000_lafalda_csv_imports.sql`
 5. `supabase/migrations/20261122110000_lafalda_import_authorization_audit.sql`
 6. `supabase/testing/lafalda_apply_fixture_catalogs.sql`
-7. `supabase/testing/lafalda_apply_fixture.sql`
+7. `supabase/testing/lafalda_apply_fixture_debt_identity.sql`
+8. `supabase/testing/lafalda_apply_fixture.sql`
 
 El primer archivo exige que el esquema `public` este vacio. Si el proyecto de testing ya contiene tablas de negocio, no se deben borrar datos ni reutilizarlo para esta prueba: crear otro proyecto limpio.
 

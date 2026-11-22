@@ -2,6 +2,7 @@
 -- No ejecutar en produccion ni incluir en las migraciones generales.
 -- Requiere las migraciones de importacion y autorizacion ya aplicadas.
 -- Requiere ejecutar antes la preparacion de catalogos sinteticos de este directorio.
+-- Requiere un generador para public.debt.id en Testing.
 
 create table if not exists public.equitas_testing_fixture_control (
   id boolean primary key default true check (id),
