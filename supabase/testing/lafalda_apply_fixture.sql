@@ -1,7 +1,7 @@
 -- SOLO PARA EQUITAS-TP-TESTING.
 -- No ejecutar en produccion ni incluir en las migraciones generales.
 -- Requiere las migraciones de importacion y autorizacion ya aplicadas.
--- Reutiliza catalogos existentes: no crea ni modifica moneda, tipos, estados ni tenant.
+-- Requiere ejecutar antes la preparacion de catalogos sinteticos de este directorio.
 
 create table if not exists public.equitas_testing_fixture_control (
   id boolean primary key default true check (id),
@@ -128,12 +128,12 @@ begin
     raise exception 'Falta el tenant 1 requerido por la prueba aislada.';
   end if;
 
-  select id into v_role_id from public.role order by id limit 1;
+  select id into v_role_id
+  from public.role
+  where name = 'equitastp_fixture_importer';
   select id into v_debtor_type_id
   from public.debtor_type
-  where active
-  order by id
-  limit 1;
+  where key = 'equitastp_fixture_debtor_type';
   select id into v_currency_id
   from public.currency
   where code = 'ARS'
@@ -141,9 +141,7 @@ begin
   select id into v_debt_status_id from public.debt_status where id = 2;
   select id into v_contact_type_id
   from public.contact_type
-  where active
-  order by id
-  limit 1;
+  where key = 'equitastp_fixture_contact';
 
   if v_role_id is null
      or v_debtor_type_id is null
@@ -151,7 +149,7 @@ begin
      or v_debt_status_id is null
      or v_contact_type_id is null then
     raise exception
-      'Faltan catalogos requeridos: rol, tipo de objeto activo, ARS, estado 2 o tipo de contacto activo.';
+      'Faltan catalogos sinteticos de testing. Ejecute lafalda_apply_fixture_catalogs.sql antes del fixture.';
   end if;
 
   -- No se sobrescriben datos ajenos si los IDs o claves sinteticas ya pertenecen a otro registro.
