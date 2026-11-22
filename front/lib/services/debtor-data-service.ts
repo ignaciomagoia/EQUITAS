@@ -1,4 +1,4 @@
-import { loadRawDebtorData } from '@/lib/data/raw-debtor-loader'
+import { loadRawDebtorData, loadRawDebtorDetailData } from '@/lib/data/raw-debtor-loader'
 import { mapDebtorObjectsFromRawData } from '@/lib/mappers/debtor-object-mapper'
 import { calculateDaysSinceDate } from '@/lib/parsers/date-value-parser'
 import type { DebtorDetailData } from '@/types/equitas-domain'
@@ -56,7 +56,7 @@ export async function getDebtorsDataFromService() {
 
 // Caso de uso del detalle de un objeto de deuda.
 export async function getDebtorDetailDataFromService(debtorId: string) {
-  const rawData = await loadRawDebtorData()
+  const rawData = await loadRawDebtorDetailData(debtorId)
   const mapped = mapDebtorObjectsFromRawData(rawData)
   const detail = mapDebtorDetailFromMappedObjects(debtorId, mapped)
 

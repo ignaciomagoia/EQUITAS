@@ -12,7 +12,7 @@ vi.mock('@/lib/supabase-server', () => ({
   createServerSupabaseClient: createServerSupabaseClientMock,
 }))
 
-import { loadRawDebtorData } from '@/lib/data/raw-debtor-loader'
+import { loadRawDebtorData, loadRawDebtorDetailData } from '@/lib/data/raw-debtor-loader'
 import type { RawRow } from '@/types/equitas-domain'
 import { createPaginatedSupabase } from '../fixtures/paginated-supabase'
 
@@ -79,6 +79,55 @@ describe('integracion simulada de lectura de objetos de deuda', () => {
     expect(client.from).not.toHaveBeenCalledWith('debt')
     expect(client.from).not.toHaveBeenCalledWith('debtor_person')
     expect(client.from).not.toHaveBeenCalledWith('debtor_contact')
+  })
+
+  it('carga solo las filas del objeto solicitado y sus relaciones', async () => {
+    const { client, requests } = createPaginatedSupabase({
+      debtor: [
+        { id: 1, external_id: 1001 },
+        { id: 2, external_id: 1002 },
+      ],
+      debt: [
+        { id: 11, debtor: 1 },
+        { id: 12, debtor: 2 },
+      ],
+      debtor_person: [
+        { id: 21, debtor: 1, person: 31 },
+        { id: 22, debtor: 2, person: 32 },
+      ],
+      person: [
+        { id: 31, first_name: 'Ana' },
+        { id: 32, first_name: 'Beto' },
+      ],
+      debtor_contact: [
+        { id: 41, person: 31, value: 'ana@example.test' },
+        { id: 42, person: 32, value: 'beto@example.test' },
+      ],
+      debtor_profile: [
+        { id: 51, debtor: 1 },
+        { id: 52, debtor: 2 },
+      ],
+      debtor_type: [{ id: 1, value: 'Agua' }],
+      debt_status: [{ id: 1, value: 'Activa' }],
+    })
+    createServerSupabaseClientMock.mockResolvedValue(client)
+
+    const result = await loadRawDebtorDetailData('1')
+
+    expect(result.debtors).toEqual([{ id: 1, external_id: 1001 }])
+    expect(result.debts).toEqual([{ id: 11, debtor: 1 }])
+    expect(result.debtorPeople).toEqual([{ id: 21, debtor: 1, person: 31 }])
+    expect(result.people).toEqual([{ id: 31, first_name: 'Ana' }])
+    expect(result.debtorContacts).toEqual([{ id: 41, person: 31, value: 'ana@example.test' }])
+    expect(requests).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ table: 'debtor', filters: { id: 'eq.1' } }),
+        expect.objectContaining({ table: 'debt', filters: { debtor: 'eq.1' } }),
+        expect.objectContaining({ table: 'debtor_person', filters: { debtor: 'eq.1' } }),
+        expect.objectContaining({ table: 'person', filters: { id: 'in.(31)' } }),
+        expect.objectContaining({ table: 'debtor_contact', filters: { person: 'in.(31)' } }),
+      ])
+    )
   })
 
   it('convierte un error de conexion informado por Supabase en una alerta', async () => {

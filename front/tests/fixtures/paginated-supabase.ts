@@ -8,6 +8,7 @@ export type DataRequest = {
   offset: number
   order: string | null
   after: string | null
+  filters: Record<string, string>
 }
 
 type Options = {
@@ -23,12 +24,20 @@ export function createPaginatedSupabase(
   const requests: DataRequest[] = []
   const fetchRows: typeof fetch = async (input) => {
     const url = new URL(input instanceof Request ? input.url : String(input))
+    const idFilters = url.searchParams.getAll('id')
     const request: DataRequest = {
       table: url.pathname.split('/').at(-1)!,
       limit: Number(url.searchParams.get('limit') ?? serverMaxRows),
       offset: Number(url.searchParams.get('offset') ?? 0),
       order: url.searchParams.get('order'),
-      after: url.searchParams.get('id')?.replace(/^gt\./, '') ?? null,
+      after: idFilters.find((value) => value.startsWith('gt.'))?.slice(3) ?? null,
+      filters: Object.fromEntries(
+        [...url.searchParams.entries()].filter(
+          ([key, value]) =>
+            !['select', 'limit', 'offset', 'order'].includes(key) &&
+            !(key === 'id' && value.startsWith('gt.'))
+        )
+      ),
     }
     requests.push(request)
     const error = fail?.(request)
@@ -45,6 +54,16 @@ export function createPaginatedSupabase(
     }
     if (request.after !== null) {
       rows = rows.filter((row) => Number(row.id) > Number(request.after))
+    }
+    for (const [column, filter] of Object.entries(request.filters)) {
+      if (filter.startsWith('eq.')) {
+        const expected = filter.slice(3)
+        rows = rows.filter((row) => String(row[column]) === expected)
+      }
+      if (filter.startsWith('in.(') && filter.endsWith(')')) {
+        const values = new Set(filter.slice(4, -1).split(','))
+        rows = rows.filter((row) => values.has(String(row[column])))
+      }
     }
     rows = rows.slice(request.offset, request.offset + Math.min(request.limit, serverMaxRows))
     return new Response(JSON.stringify(rows), {

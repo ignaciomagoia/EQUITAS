@@ -1,11 +1,36 @@
-import { loadAllTableRows } from '@/lib/data/paginated-table-reader'
+import {
+  loadAllTableRows,
+  loadFilteredTableRows,
+} from '@/lib/data/paginated-table-reader'
 import { EQUITAS_TABLE_NAMES } from '@/lib/data/table-names'
 import { createServerSupabaseClient } from '@/lib/supabase-server'
-import type { DataWarning, RawDebtorDataBundle } from '@/types/equitas-domain'
+import type { DataWarning, RawDebtorDataBundle, RawRow } from '@/types/equitas-domain'
 
 type RawDebtorDataOptions = {
   includeDebtDetails?: boolean
   includeRelationships?: boolean
+}
+
+function collectWarnings(results: Array<{ warning: DataWarning | null }>) {
+  return results
+    .map((result) => result.warning)
+    .filter((warning): warning is DataWarning => Boolean(warning))
+}
+
+function uniqueFilterValues(rows: RawRow[], key: string) {
+  const values = new Set<string | number>()
+
+  for (const row of rows) {
+    const value = row[key]
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      values.add(value)
+    }
+    if (typeof value === 'string' && value.trim()) {
+      values.add(value.trim())
+    }
+  }
+
+  return [...values]
 }
 
 // Punto de entrada de datos crudos para objetos de deuda.
@@ -34,9 +59,7 @@ export async function loadRawDebtorData({
     tables.map(async (table) => [table, await loadAllTableRows(table, supabase)] as const)
   )
   const rowsByTable = new Map(results)
-  const warnings = results
-    .map(([, result]) => result.warning)
-    .filter((warning): warning is DataWarning => Boolean(warning))
+  const warnings = collectWarnings(results.map(([, result]) => result))
 
   return {
     debtors: rowsByTable.get(EQUITAS_TABLE_NAMES.debtor)?.rows ?? [],
@@ -48,5 +71,47 @@ export async function loadRawDebtorData({
     debtorContacts: rowsByTable.get(EQUITAS_TABLE_NAMES.debtorContact)?.rows ?? [],
     debtorProfiles: rowsByTable.get(EQUITAS_TABLE_NAMES.debtorProfile)?.rows ?? [],
     warnings,
+  }
+}
+
+// Carga solamente las filas necesarias para un objeto. Evita descargar todo el padron para abrir su detalle.
+export async function loadRawDebtorDetailData(debtorId: string): Promise<RawDebtorDataBundle> {
+  const supabase = await createServerSupabaseClient()
+  const [debtorResult, debtorTypesResult, debtsResult, debtStatusesResult, debtorPeopleResult, profileResult] =
+    await Promise.all([
+      loadFilteredTableRows(EQUITAS_TABLE_NAMES.debtor, { id: debtorId }, supabase),
+      loadAllTableRows(EQUITAS_TABLE_NAMES.debtorType, supabase),
+      loadFilteredTableRows(EQUITAS_TABLE_NAMES.debt, { debtor: debtorId }, supabase),
+      loadAllTableRows(EQUITAS_TABLE_NAMES.debtStatus, supabase),
+      loadFilteredTableRows(EQUITAS_TABLE_NAMES.debtorPerson, { debtor: debtorId }, supabase),
+      loadFilteredTableRows(EQUITAS_TABLE_NAMES.debtorProfile, { debtor: debtorId }, supabase),
+    ])
+
+  const personIds = uniqueFilterValues(debtorPeopleResult.rows, 'person')
+  const [peopleResult, debtorContactsResult] = await Promise.all([
+    loadFilteredTableRows(EQUITAS_TABLE_NAMES.person, { id: personIds }, supabase),
+    loadFilteredTableRows(EQUITAS_TABLE_NAMES.debtorContact, { person: personIds }, supabase),
+  ])
+  const results = [
+    debtorResult,
+    debtorTypesResult,
+    debtsResult,
+    debtStatusesResult,
+    debtorPeopleResult,
+    peopleResult,
+    debtorContactsResult,
+    profileResult,
+  ]
+
+  return {
+    debtors: debtorResult.rows,
+    debtorTypes: debtorTypesResult.rows,
+    debts: debtsResult.rows,
+    debtStatuses: debtStatusesResult.rows,
+    debtorPeople: debtorPeopleResult.rows,
+    people: peopleResult.rows,
+    debtorContacts: debtorContactsResult.rows,
+    debtorProfiles: profileResult.rows,
+    warnings: collectWarnings(results),
   }
 }
