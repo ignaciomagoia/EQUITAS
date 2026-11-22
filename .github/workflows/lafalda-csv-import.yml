@@ -26,7 +26,8 @@ jobs:
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
       LAFALDA_IMPORT_TENANT_ID: '1'
-      LAFALDA_IMPORT_APPLY_ENABLED: 'false'
+      # Permanece en false si la variable del repositorio no se configura explícitamente.
+      LAFALDA_IMPORT_APPLY_ENABLED: ${{ vars.LAFALDA_IMPORT_APPLY_ENABLED || 'false' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

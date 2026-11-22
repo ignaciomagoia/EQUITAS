@@ -47,6 +47,13 @@ TERMINAL_JOB_STATUSES = {
 }
 
 
+def is_lafalda_import_apply_enabled(value: str | None = None) -> bool:
+    """Habilita apply solo mediante el valor explicito ``true``."""
+
+    configured_value = value if value is not None else os.getenv("LAFALDA_IMPORT_APPLY_ENABLED", "")
+    return configured_value.strip().lower() == "true"
+
+
 def _chunks(values: Iterable[int], size: int = DEFAULT_BULK_BATCH_SIZE) -> Iterable[list[int]]:
     current_chunk: list[int] = []
 
@@ -72,7 +79,12 @@ def _unwrap_rpc_data(data: Any) -> dict[str, Any]:
 
 
 class LafaldaDailyCsvWorker:
-    def __init__(self, worker_id: str | None = None, tenant_id: int | None = None) -> None:
+    def __init__(
+        self,
+        worker_id: str | None = None,
+        tenant_id: int | None = None,
+        apply_enabled: bool | None = None,
+    ) -> None:
         self.worker_id = worker_id or f"lafalda-csv-{gethostname()}"
         configured_tenant = tenant_id or int(os.getenv("LAFALDA_IMPORT_TENANT_ID", "0"))
 
@@ -82,13 +94,20 @@ class LafaldaDailyCsvWorker:
             )
 
         self.tenant_id = configured_tenant
+        self.apply_enabled = (
+            is_lafalda_import_apply_enabled() if apply_enabled is None else apply_enabled
+        )
 
     def _claim_next_job(self) -> dict[str, Any] | None:
         response = execute_supabase_operation(
             "claim La Falda CSV import job",
             lambda: supabase.rpc(
-                "claim_lafalda_import_job",
-                {"p_worker_id": self.worker_id, "p_tenant_id": self.tenant_id},
+                "claim_lafalda_import_job_v2",
+                {
+                    "p_worker_id": self.worker_id,
+                    "p_tenant_id": self.tenant_id,
+                    "p_allow_apply": self.apply_enabled,
+                },
             ).execute(),
         )
 
@@ -426,6 +445,80 @@ class LafaldaDailyCsvWorker:
             "debtor_profile,person",
         )
 
+    @staticmethod
+    def _completion_status(summary: dict[str, Any]) -> str:
+        return (
+            "COMPLETED_WITH_ERRORS"
+            if int(summary.get("rejected_rows", 0)) > 0
+            else "COMPLETED"
+        )
+
+    @staticmethod
+    def _summary_from_job(job: dict[str, Any]) -> dict[str, int]:
+        return {
+            "inserted_rows": int(job.get("inserted_rows", 0)),
+            "updated_rows": int(job.get("updated_rows", 0)),
+            "unchanged_rows": int(job.get("unchanged_rows", 0)),
+            "rejected_rows": int(job.get("rejected_rows", 0)),
+        }
+
+    def _complete_profile_recalculation(self, job_id: int, summary: dict[str, Any]) -> None:
+        self._update_job(
+            job_id,
+            {
+                "status": self._completion_status(summary),
+                "inserted_rows": int(summary.get("inserted_rows", 0)),
+                "updated_rows": int(summary.get("updated_rows", 0)),
+                "unchanged_rows": int(summary.get("unchanged_rows", 0)),
+                "rejected_rows": int(summary.get("rejected_rows", 0)),
+                "profiles_recalculated_at": datetime.now(UTC).isoformat(),
+                "profile_recalculation_error": None,
+                "error_message": None,
+                "completed_at": datetime.now(UTC).isoformat(),
+                "lock_expires_at": None,
+            },
+        )
+
+    def _record_profile_recalculation_failure(self, job_id: int, error: Exception) -> None:
+        message = str(error)
+        self._update_job(
+            job_id,
+            {
+                "status": "RECALCULATING_PROFILES",
+                "profile_recalculation_error": message,
+                "error_message": (
+                    "Las deudas ya fueron aplicadas. El recálculo de perfiles quedó pendiente "
+                    "y se reintentará sin volver a modificar deudas."
+                ),
+                "lock_expires_at": None,
+            },
+        )
+
+    def _recalculate_profiles_only(self, job: dict[str, Any]) -> bool:
+        job_id = int(job["id"])
+        summary = self._summary_from_job(job)
+
+        try:
+            self._recalculate_profiles(job_id, int(job["tenant"]))
+        except Exception as error:  # noqa: BLE001
+            self._record_profile_recalculation_failure(job_id, error)
+            print(
+                f"El recálculo de perfiles del trabajo {job_id} quedó pendiente: {error}. "
+                "Las deudas no se volverán a aplicar."
+            )
+            return True
+
+        self._complete_profile_recalculation(job_id, summary)
+        return True
+
+    @staticmethod
+    def _requires_profile_recalculation_only(job: dict[str, Any]) -> bool:
+        return (
+            job.get("mode") == "apply"
+            and job.get("merge_completed_at") is not None
+            and job.get("profiles_recalculated_at") is None
+        )
+
     def process_once(self) -> bool:
         job = self._claim_next_job()
 
@@ -436,6 +529,37 @@ class LafaldaDailyCsvWorker:
 
         if int(job["tenant"]) != self.tenant_id:
             raise RuntimeError("El worker recibio un trabajo de un tenant no autorizado.")
+
+        if self._requires_profile_recalculation_only(job):
+            if not self.apply_enabled:
+                self._update_job(
+                    job_id,
+                    {
+                        "status": "RECALCULATING_PROFILES",
+                        "error_message": (
+                            "El recálculo pendiente requiere que "
+                            "LAFALDA_IMPORT_APPLY_ENABLED sea true."
+                        ),
+                        "lock_expires_at": None,
+                    },
+                )
+                return True
+
+            return self._recalculate_profiles_only(job)
+
+        if job.get("mode") == "apply" and not self.apply_enabled:
+            self._update_job(
+                job_id,
+                {
+                    "status": "QUEUED",
+                    "error_message": (
+                        "La aplicación está deshabilitada en este worker por "
+                        "LAFALDA_IMPORT_APPLY_ENABLED."
+                    ),
+                    "lock_expires_at": None,
+                },
+            )
+            return True
 
         try:
             file_content = self._download_file(str(job["storage_path"]))
@@ -490,26 +614,24 @@ class LafaldaDailyCsvWorker:
 
             self._update_job(job_id, {"status": "MERGING"})
             applied_summary = self._run_rpc("apply_lafalda_import_stage", job_id)
-            self._update_job(job_id, {"status": "RECALCULATING_PROFILES"})
-            self._recalculate_profiles(job_id, int(job["tenant"]))
-            completed_status = (
-                "COMPLETED_WITH_ERRORS"
-                if int(applied_summary.get("rejected_rows", 0)) > 0
-                else "COMPLETED"
-            )
             self._update_job(
                 job_id,
                 {
-                    "status": completed_status,
-                    "inserted_rows": int(applied_summary.get("inserted_rows", 0)),
-                    "updated_rows": int(applied_summary.get("updated_rows", 0)),
-                    "unchanged_rows": int(applied_summary.get("unchanged_rows", 0)),
-                    "rejected_rows": int(applied_summary.get("rejected_rows", 0)),
-                    "completed_at": datetime.now(UTC).isoformat(),
-                    "lock_expires_at": None,
+                    "status": "RECALCULATING_PROFILES",
+                    "profile_recalculation_attempt_count": int(
+                        job.get("profile_recalculation_attempt_count", 0)
+                    )
+                    + 1,
+                    "profile_recalculation_error": None,
                 },
             )
-            return True
+            return self._recalculate_profiles_only(
+                {
+                    **job,
+                    **applied_summary,
+                    "merge_completed_at": datetime.now(UTC).isoformat(),
+                }
+            )
         except Exception as error:
             try:
                 self._update_job(

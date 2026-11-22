@@ -1,0 +1,366 @@
+-- Recuperacion segura del recálculo de perfiles posterior a un apply de La Falda.
+-- No modifica registros de debt/debtor durante la migración. Solo agrega estado
+-- operativo y reemplaza la RPC de merge para registrar su finalización atómicamente.
+
+alter table public.data_import_job
+  add column if not exists merge_completed_at timestamp with time zone,
+  add column if not exists profiles_recalculated_at timestamp with time zone,
+  add column if not exists profile_recalculation_attempt_count integer not null default 0
+    check (profile_recalculation_attempt_count >= 0),
+  add column if not exists profile_recalculation_error text;
+
+create index if not exists data_import_job_profile_recovery_idx
+  on public.data_import_job (tenant, merge_completed_at, profiles_recalculated_at, updated_at)
+  where merge_completed_at is not null and profiles_recalculated_at is null;
+
+-- Esta versión no reemplaza la RPC anterior: permite desplegar el worker nuevo
+-- sin romper consumidores existentes y evita reclamar trabajos apply si el worker
+-- no recibió una habilitación explícita.
+create or replace function public.claim_lafalda_import_job_v2(
+  p_worker_id text,
+  p_tenant_id bigint,
+  p_allow_apply boolean default false
+)
+returns setof public.data_import_job
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+begin
+  if p_tenant_id <> 1 then
+    raise exception 'Tenant de importacion no autorizado: %', p_tenant_id;
+  end if;
+
+  update public.data_import_job job
+  set status = 'FAILED',
+      error_message = 'La autorizacion del solicitante no esta vigente. El trabajo no fue procesado.',
+      lock_expires_at = null,
+      completed_at = now(),
+      updated_at = now()
+  where job.tenant = p_tenant_id
+    and job.status = 'QUEUED'
+    and not exists (
+      select 1
+      from public.data_import_authorization authz
+      where authz.tenant = job.tenant
+        and authz.app_user = job.requested_by
+        and authz.active
+        and authz.can_import
+    );
+
+  -- Si el merge ya terminó, no se marca como fallido: queda disponible para
+  -- reintentar únicamente perfiles cuando expire el lease del worker anterior.
+  update public.data_import_job job
+  set status = 'RECALCULATING_PROFILES',
+      lock_expires_at = null,
+      error_message = 'El worker se interrumpio luego del merge. Se reintentara solo el recálculo de perfiles.',
+      profile_recalculation_error = coalesce(
+        job.profile_recalculation_error,
+        'El worker se interrumpio antes de finalizar el recálculo de perfiles.'
+      ),
+      updated_at = now()
+  where job.tenant = p_tenant_id
+    and job.status in ('MERGING', 'RECALCULATING_PROFILES')
+    and job.merge_completed_at is not null
+    and job.profiles_recalculated_at is null
+    and job.lock_expires_at is not null
+    and job.lock_expires_at <= now();
+
+  update public.data_import_job job
+  set status = case when job.status = 'UPLOADING' then 'CANCELLED' else 'FAILED' end,
+      error_message = case
+        when job.status = 'UPLOADING' then 'La carga del archivo no finalizo antes de vencer el enlace temporal.'
+        else 'El worker dejo de responder y su bloqueo vencio. El trabajo puede reintentarse.'
+      end,
+      lock_expires_at = null,
+      completed_at = now(),
+      updated_at = now()
+  where job.tenant = p_tenant_id
+    and (
+      (
+        job.status in ('VALIDATING', 'STAGING', 'MERGING')
+        and job.merge_completed_at is null
+        and job.lock_expires_at is not null
+        and job.lock_expires_at <= now()
+      )
+      or (
+        job.status = 'UPLOADING'
+        and job.created_at <= now() - interval '2 hours'
+      )
+    );
+
+  return query
+  with candidate as (
+    select
+      job.id,
+      (
+        job.mode = 'apply'
+        and job.merge_completed_at is not null
+        and job.profiles_recalculated_at is null
+      ) as profile_recovery
+    from public.data_import_job job
+    where job.tenant = p_tenant_id
+      and (job.mode = 'dry_run' or p_allow_apply)
+      and (
+        (
+          job.status = 'QUEUED'
+          and exists (
+            select 1
+            from public.data_import_authorization authz
+            where authz.tenant = job.tenant
+              and authz.app_user = job.requested_by
+              and authz.active
+              and authz.can_import
+          )
+        )
+        or (
+          job.status = 'RECALCULATING_PROFILES'
+          and job.mode = 'apply'
+          and job.merge_completed_at is not null
+          and job.profiles_recalculated_at is null
+          and (job.lock_expires_at is null or job.lock_expires_at <= now())
+        )
+      )
+    order by job.created_at
+    for update skip locked
+    limit 1
+  )
+  update public.data_import_job job
+  set status = case when candidate.profile_recovery then 'RECALCULATING_PROFILES' else 'VALIDATING' end,
+      worker_id = p_worker_id,
+      lock_expires_at = now() + interval '30 minutes',
+      attempt_count = job.attempt_count + 1,
+      profile_recalculation_attempt_count = case
+        when candidate.profile_recovery then job.profile_recalculation_attempt_count + 1
+        else job.profile_recalculation_attempt_count
+      end,
+      started_at = coalesce(job.started_at, now()),
+      updated_at = now(),
+      error_message = null
+  from candidate
+  where job.id = candidate.id
+  returning job.*;
+end;
+$$;
+
+create or replace function public.apply_lafalda_import_stage(p_job_id bigint)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+declare
+  v_apply_enabled boolean;
+  v_updated_rows integer := 0;
+  v_inserted_rows integer := 0;
+  v_unchanged_rows integer := 0;
+  v_rejected_rows integer := 0;
+  v_valid_rows integer := 0;
+begin
+  perform public.assert_lafalda_import_job(
+    p_job_id,
+    array['MERGING'],
+    true
+  );
+  perform public.assert_lafalda_import_requester_authorized(p_job_id, true);
+
+  select apply_enabled
+  into v_apply_enabled
+  from public.lafalda_import_control
+  where tenant = 1
+  for share;
+
+  if coalesce(v_apply_enabled, false) is not true then
+    raise exception 'La aplicacion de importaciones CSV esta bloqueada a nivel de base de datos.';
+  end if;
+
+  insert into public.data_import_debt_change (
+    job, debt, debtor, debt_external_id, change_type, before_values
+  )
+  select
+    p_job_id,
+    debt.id,
+    debt.debtor,
+    debt.external_id,
+    'UPDATED',
+    jsonb_build_object(
+      'type', debt.type,
+      'description', debt.description,
+      'original_amount', debt.original_amount,
+      'current_amount', debt.current_amount,
+      'currency', debt.currency,
+      'issue_date', debt.issue_date,
+      'due_date', debt.due_date,
+      'last_collection_date', debt.last_collection_date,
+      'period', debt.period,
+      'status', debt.status
+    )
+  from public.debt debt
+  join public.data_import_debt_stage stage
+    on debt.debtor = stage.debtor_id
+    and debt.external_id = stage.debt_external_id
+  where stage.job = p_job_id
+    and stage.is_valid
+    and (
+      ('debt_type' = any(stage.provided_fields) and debt.type is distinct from stage.debt_type) or
+      ('description' = any(stage.provided_fields) and debt.description is distinct from stage.description) or
+      ('original_amount' = any(stage.provided_fields) and debt.original_amount is distinct from stage.original_amount) or
+      ('current_amount' = any(stage.provided_fields) and debt.current_amount is distinct from stage.current_amount) or
+      ('currency' = any(stage.provided_fields) and debt.currency is distinct from stage.currency) or
+      ('issue_date' = any(stage.provided_fields) and debt.issue_date is distinct from stage.issue_date) or
+      ('due_date' = any(stage.provided_fields) and debt.due_date is distinct from stage.due_date) or
+      ('last_collection_date' = any(stage.provided_fields) and debt.last_collection_date is distinct from stage.last_collection_date) or
+      ('period' = any(stage.provided_fields) and debt.period is distinct from stage.period) or
+      ('status' = any(stage.provided_fields) and debt.status is distinct from stage.status)
+    )
+  on conflict (job, debtor, debt_external_id) do nothing;
+
+  update public.debt debt
+  set type = case when 'debt_type' = any(stage.provided_fields) then stage.debt_type else debt.type end,
+      description = case when 'description' = any(stage.provided_fields) then stage.description else debt.description end,
+      original_amount = case when 'original_amount' = any(stage.provided_fields) then stage.original_amount else debt.original_amount end,
+      current_amount = case when 'current_amount' = any(stage.provided_fields) then stage.current_amount else debt.current_amount end,
+      currency = case when 'currency' = any(stage.provided_fields) then stage.currency else debt.currency end,
+      issue_date = case when 'issue_date' = any(stage.provided_fields) then stage.issue_date else debt.issue_date end,
+      due_date = case when 'due_date' = any(stage.provided_fields) then stage.due_date else debt.due_date end,
+      last_collection_date = case when 'last_collection_date' = any(stage.provided_fields) then stage.last_collection_date else debt.last_collection_date end,
+      period = case when 'period' = any(stage.provided_fields) then stage.period else debt.period end,
+      status = case when 'status' = any(stage.provided_fields) then stage.status else debt.status end
+  from public.data_import_debt_stage stage
+  where stage.job = p_job_id
+    and stage.is_valid
+    and debt.debtor = stage.debtor_id
+    and debt.external_id = stage.debt_external_id
+    and (
+      ('debt_type' = any(stage.provided_fields) and debt.type is distinct from stage.debt_type) or
+      ('description' = any(stage.provided_fields) and debt.description is distinct from stage.description) or
+      ('original_amount' = any(stage.provided_fields) and debt.original_amount is distinct from stage.original_amount) or
+      ('current_amount' = any(stage.provided_fields) and debt.current_amount is distinct from stage.current_amount) or
+      ('currency' = any(stage.provided_fields) and debt.currency is distinct from stage.currency) or
+      ('issue_date' = any(stage.provided_fields) and debt.issue_date is distinct from stage.issue_date) or
+      ('due_date' = any(stage.provided_fields) and debt.due_date is distinct from stage.due_date) or
+      ('last_collection_date' = any(stage.provided_fields) and debt.last_collection_date is distinct from stage.last_collection_date) or
+      ('period' = any(stage.provided_fields) and debt.period is distinct from stage.period) or
+      ('status' = any(stage.provided_fields) and debt.status is distinct from stage.status)
+    );
+
+  update public.data_import_debt_change debt_change
+  set after_values = jsonb_build_object(
+    'type', debt.type,
+    'description', debt.description,
+    'original_amount', debt.original_amount,
+    'current_amount', debt.current_amount,
+    'currency', debt.currency,
+    'issue_date', debt.issue_date,
+    'due_date', debt.due_date,
+    'last_collection_date', debt.last_collection_date,
+    'period', debt.period,
+    'status', debt.status
+  )
+  from public.debt debt
+  where debt_change.job = p_job_id
+    and debt_change.change_type = 'UPDATED'
+    and debt_change.debt = debt.id;
+
+  with inserted_debts as (
+    insert into public.debt (
+      external_id, debtor, type, description, original_amount, current_amount,
+      currency, issue_date, due_date, last_collection_date, period, status
+    )
+    select
+      stage.debt_external_id,
+      stage.debtor_id,
+      stage.debt_type,
+      stage.description,
+      stage.original_amount,
+      stage.current_amount,
+      stage.currency,
+      stage.issue_date,
+      stage.due_date,
+      stage.last_collection_date,
+      stage.period,
+      stage.status
+    from public.data_import_debt_stage stage
+    left join public.debt existing_debt
+      on existing_debt.debtor = stage.debtor_id
+      and existing_debt.external_id = stage.debt_external_id
+    where stage.job = p_job_id
+      and stage.is_valid
+      and existing_debt.id is null
+      and stage.original_amount is not null
+      and stage.current_amount is not null
+    on conflict (debtor, external_id) do nothing
+    returning id, debtor, external_id, type, description, original_amount, current_amount,
+              currency, issue_date, due_date, last_collection_date, period, status
+  )
+  insert into public.data_import_debt_change (
+    job, debt, debtor, debt_external_id, change_type, after_values
+  )
+  select
+    p_job_id,
+    inserted.id,
+    inserted.debtor,
+    inserted.external_id,
+    'INSERTED',
+    jsonb_build_object(
+      'type', inserted.type,
+      'description', inserted.description,
+      'original_amount', inserted.original_amount,
+      'current_amount', inserted.current_amount,
+      'currency', inserted.currency,
+      'issue_date', inserted.issue_date,
+      'due_date', inserted.due_date,
+      'last_collection_date', inserted.last_collection_date,
+      'period', inserted.period,
+      'status', inserted.status
+    )
+  from inserted_debts inserted
+  on conflict (job, debtor, debt_external_id) do nothing;
+
+  select count(*)
+  into v_updated_rows
+  from public.data_import_debt_change debt_change
+  where debt_change.job = p_job_id and debt_change.change_type = 'UPDATED';
+
+  select count(*)
+  into v_inserted_rows
+  from public.data_import_debt_change debt_change
+  where debt_change.job = p_job_id and debt_change.change_type = 'INSERTED';
+
+  select count(*)
+  into v_valid_rows
+  from public.data_import_debt_stage stage
+  where stage.job = p_job_id and stage.is_valid;
+
+  select count(*)
+  into v_rejected_rows
+  from public.data_import_row_error row_error
+  where row_error.job = p_job_id;
+
+  v_unchanged_rows := greatest(v_valid_rows - v_updated_rows - v_inserted_rows, 0);
+
+  -- Este estado se persiste en la misma transacción que las deudas. Si el
+  -- worker cae después de aquí, el próximo intento solamente recalcula perfiles.
+  update public.data_import_job job
+  set inserted_rows = v_inserted_rows,
+      updated_rows = v_updated_rows,
+      unchanged_rows = v_unchanged_rows,
+      rejected_rows = v_rejected_rows,
+      merge_completed_at = coalesce(job.merge_completed_at, now()),
+      updated_at = now()
+  where job.id = p_job_id;
+
+  return jsonb_build_object(
+    'inserted_rows', v_inserted_rows,
+    'updated_rows', v_updated_rows,
+    'unchanged_rows', v_unchanged_rows,
+    'rejected_rows', v_rejected_rows
+  );
+end;
+$$;
+
+revoke all on function public.claim_lafalda_import_job_v2(text, bigint, boolean)
+  from public, anon, authenticated;
+grant execute on function public.claim_lafalda_import_job_v2(text, bigint, boolean) to service_role;
+
+notify pgrst, 'reload schema';
