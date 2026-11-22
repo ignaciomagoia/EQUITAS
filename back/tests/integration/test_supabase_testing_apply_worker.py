@@ -47,15 +47,29 @@ def _require_testing_environment(monkeypatch: pytest.MonkeyPatch):
     return create_client(url, service_role_key)
 
 
-def _csv_content() -> bytes:
-    return b"\n".join(
-        [
-            b"Bien_Tipo_Id,Cuenta,DEUD_id,tipo_deuda,descripcion,NOTD_capital,NOTD_totalActualizado,NOTD_vencimiento,fecha_emision,fecha_ultima_gestion,periodo,estado,moneda",
-            b"1,700001,900001,inmueble,Deuda actualizada,80,125,2025-02-01,2025-01-01,2025-02-15,2025-01,2,1",
-            b"1,700001,900002,inmueble,Solo descripcion actualizada,,,,,,,,",
-            b"1,700001,900004,inmueble,Deuda nueva sintetica,50,75,2025-05-01,2025-04-01,2025-04-15,2025-04,2,1",
-        ]
-    )
+def _fixture_int(fixture: dict[str, Any], key: str) -> int:
+    value = fixture.get(key)
+    if value is None:
+        raise KeyError(f"El fixture remoto no devolvio {key}.")
+    return int(value)
+
+
+def _csv_content(fixture: dict[str, Any]) -> bytes:
+    debtor_type_id = _fixture_int(fixture, "debtor_type_id")
+    account = _fixture_int(fixture, "fixture_account")
+    currency_id = _fixture_int(fixture, "currency_id")
+    debt_status_id = _fixture_int(fixture, "debt_status_id")
+    debt_one_id = _fixture_int(fixture, "debt_one_external_id")
+    debt_two_id = _fixture_int(fixture, "debt_two_external_id")
+    new_debt_id = _fixture_int(fixture, "debt_new_external_id")
+
+    rows = [
+        "Bien_Tipo_Id,Cuenta,DEUD_id,tipo_deuda,descripcion,NOTD_capital,NOTD_totalActualizado,NOTD_vencimiento,fecha_emision,fecha_ultima_gestion,periodo,estado,moneda",
+        f"{debtor_type_id},{account},{debt_one_id},inmueble,Deuda actualizada,80,125,2025-02-01,2025-01-01,2025-02-15,2025-01,{debt_status_id},{currency_id}",
+        f"{debtor_type_id},{account},{debt_two_id},inmueble,Solo descripcion actualizada,,,,,,,,",
+        f"{debtor_type_id},{account},{new_debt_id},inmueble,Deuda nueva sintetica,50,75,2025-05-01,2025-04-01,2025-04-15,2025-04,{debt_status_id},{currency_id}",
+    ]
+    return "\n".join(rows).encode()
 
 
 def _single(response: Any) -> dict[str, Any]:
@@ -64,7 +78,7 @@ def _single(response: Any) -> dict[str, Any]:
     return response.data
 
 
-def _queue_job(client: Any, content: bytes, storage_path: str) -> int:
+def _queue_job(client: Any, content: bytes, storage_path: str, requested_by: int) -> int:
     upload = client.storage.from_("lafalda-imports").upload(
         storage_path,
         content,
@@ -77,7 +91,7 @@ def _queue_job(client: Any, content: bytes, storage_path: str) -> int:
         .insert(
             {
                 "tenant": 1,
-                "requested_by": 1001,
+                "requested_by": requested_by,
                 "file_name": "apply_sintetico.csv",
                 "storage_path": storage_path,
                 "content_sha256": sha256(content).hexdigest(),
@@ -106,7 +120,7 @@ def test_testing_worker_applies_changes_idempotently_and_recalculates_profiles(
     prepared = False
 
     try:
-        client.rpc("testing_prepare_lafalda_apply_fixture").execute()
+        fixture = _single(client.rpc("testing_prepare_lafalda_apply_fixture").execute())
         prepared = True
         worker_module = importlib.import_module("ETL.daily_csv_worker")
         monkeypatch.setattr(worker_module, "supabase", client)
@@ -114,9 +128,16 @@ def test_testing_worker_applies_changes_idempotently_and_recalculates_profiles(
             worker_id="pytest-equitas-tp-testing",
             tenant_id=1,
         )
-        content = _csv_content()
+        content = _csv_content(fixture)
+        fixture_user_id = _fixture_int(fixture, "fixture_user_id")
+        fixture_person_id = _fixture_int(fixture, "fixture_person_id")
+        fixture_debtor_id = _fixture_int(fixture, "fixture_debtor_id")
+        debt_one_id = _fixture_int(fixture, "debt_one_external_id")
+        debt_two_id = _fixture_int(fixture, "debt_two_external_id")
+        absent_debt_id = _fixture_int(fixture, "debt_absent_external_id")
+        new_debt_id = _fixture_int(fixture, "debt_new_external_id")
 
-        first_job_id = _queue_job(client, content, first_storage_path)
+        first_job_id = _queue_job(client, content, first_storage_path, fixture_user_id)
 
         assert worker.process_once() is True
 
@@ -130,39 +151,39 @@ def test_testing_worker_applies_changes_idempotently_and_recalculates_profiles(
         updated = _single(
             client.table("debt")
             .select("description,original_amount,current_amount")
-            .eq("debtor", 1001)
-            .eq("external_id", 900001)
+            .eq("debtor", fixture_debtor_id)
+            .eq("external_id", debt_one_id)
             .single()
             .execute()
         )
         partial = _single(
             client.table("debt")
             .select("description,original_amount,current_amount")
-            .eq("debtor", 1001)
-            .eq("external_id", 900002)
+            .eq("debtor", fixture_debtor_id)
+            .eq("external_id", debt_two_id)
             .single()
             .execute()
         )
         absent = _single(
             client.table("debt")
             .select("description,current_amount")
-            .eq("debtor", 1001)
-            .eq("external_id", 900003)
+            .eq("debtor", fixture_debtor_id)
+            .eq("external_id", absent_debt_id)
             .single()
             .execute()
         )
         profile = _single(
             client.table("debtor_profile")
             .select("total_debt_amount,debt_count,profile_generated_at")
-            .eq("debtor", 1001)
+            .eq("debtor", fixture_debtor_id)
             .single()
             .execute()
         )
         detail = _single(
             client.table("debtor_profile_detail")
             .select("risk_value,reason")
-            .eq("debtor_profile", 1001)
-            .eq("person", 1001)
+            .eq("debtor_profile", fixture_debtor_id)
+            .eq("person", fixture_person_id)
             .single()
             .execute()
         )
@@ -207,7 +228,7 @@ def test_testing_worker_applies_changes_idempotently_and_recalculates_profiles(
         assert sorted(row["change_type"] for row in change_rows) == ["INSERTED", "UPDATED", "UPDATED"]
         assert "COMPLETED" in [row["status"] for row in audit_statuses]
 
-        second_job_id = _queue_job(client, content, second_storage_path)
+        second_job_id = _queue_job(client, content, second_storage_path, fixture_user_id)
 
         assert worker.process_once() is True
 
@@ -221,8 +242,8 @@ def test_testing_worker_applies_changes_idempotently_and_recalculates_profiles(
         duplicate_count = (
             client.table("debt")
             .select("id", count="exact")
-            .eq("debtor", 1001)
-            .eq("external_id", 900004)
+            .eq("debtor", fixture_debtor_id)
+            .eq("external_id", new_debt_id)
             .execute()
             .count
         )
