@@ -1,0 +1,46 @@
+name: Importacion CSV La Falda
+
+on:
+  workflow_dispatch:
+    inputs:
+      job_id:
+        description: Identificador del trabajo encolado por EQUITAS
+        required: false
+        type: string
+  schedule:
+    - cron: '7,22,37,52 * * * *'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: lafalda-csv-import-worker
+  cancel-in-progress: false
+
+jobs:
+  process-queued-import:
+    name: Procesar una importacion CSV encolada
+    runs-on: ubuntu-24.04
+    timeout-minutes: 330
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      LAFALDA_IMPORT_TENANT_ID: '1'
+      LAFALDA_IMPORT_APPLY_ENABLED: 'false'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version-file: back/.python-version
+          cache: pip
+          cache-dependency-path: |
+            back/requirements.txt
+            back/constraints.txt
+      - name: Instalar dependencias del worker
+        working-directory: back
+        run: python -m pip install --requirement requirements.txt --constraint constraints.txt
+      - name: Procesar un trabajo en modo seguro
+        working-directory: back
+        run: python -m ETL.daily_csv_worker --once

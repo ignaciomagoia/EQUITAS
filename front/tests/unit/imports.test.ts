@@ -1,0 +1,40 @@
+import { describe, expect, it } from 'vitest'
+
+import { calculateImportProgress, isImportMode, shouldUpdateSelectedImportDetail } from '@/lib/imports'
+
+describe('import CSV helpers', () => {
+  it('accepts only supported import modes', () => {
+    // Arrange / Act / Assert
+    expect(isImportMode('dry_run')).toBe(true)
+    expect(isImportMode('apply')).toBe(true)
+    expect(isImportMode('preview')).toBe(false)
+  })
+
+  it('reports staged progress without declaring completion early', () => {
+    // Arrange
+    const job = { status: 'STAGING', total_rows: 100, processed_rows: 50 }
+
+    // Act
+    const progress = calculateImportProgress(job)
+
+    // Assert
+    expect(progress).toBe(45)
+  })
+
+  it('reports one hundred percent only for terminal completed statuses', () => {
+    // Arrange / Act / Assert
+    expect(calculateImportProgress({ status: 'DRY_RUN_COMPLETED', total_rows: 0, processed_rows: 0 })).toBe(100)
+    expect(calculateImportProgress({ status: 'COMPLETED_WITH_ERRORS', total_rows: 20, processed_rows: 20 })).toBe(100)
+    expect(calculateImportProgress({ status: 'FAILED', total_rows: 20, processed_rows: 20 })).toBe(90)
+  })
+
+  it('keeps the selected import detail when a stale request finishes later', () => {
+    // Arrange
+    const selectedJobId = 24
+
+    // Act / Assert
+    expect(shouldUpdateSelectedImportDetail(selectedJobId, 13, true)).toBe(false)
+    expect(shouldUpdateSelectedImportDetail(selectedJobId, 24, false)).toBe(false)
+    expect(shouldUpdateSelectedImportDetail(selectedJobId, 24, true)).toBe(true)
+  })
+})

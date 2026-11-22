@@ -1,0 +1,131 @@
+# =========================
+# Dependencies
+# =========================
+node_modules/
+.pnp
+.pnp.*
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/versions
+
+# =========================
+# Testing
+# =========================
+coverage/
+.coverage
+.coverage.*
+htmlcov/
+.quality/
+.pytest_cache/
+.ruff_cache/
+
+# =========================
+# Next.js
+# =========================
+.next/
+out/
+build/
+dist/
+
+# =========================
+# Logs
+# =========================
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# =========================
+# Environment variables
+# =========================
+.env
+.env.local
+.env.*.local
+.env.development
+.env.production
+
+# Allow example env files
+!.env.example
+!front/.env.example
+!back/.env.example
+
+# =========================
+# Vercel
+# =========================
+.vercel/
+
+# =========================
+# TypeScript
+# =========================
+*.tsbuildinfo
+next-env.d.ts
+
+# =========================
+# Python / FastAPI
+# =========================
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+venv/
+env/
+
+# =========================
+# OS / IDE
+# =========================
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# =========================
+# Sensitive data / imports
+# =========================
+database/raw/
+database/data/
+database/imports/
+*.xlsx
+*.csv
+*.dump
+*.backup
+*.bak
+
+# =========================
+# Backend specific
+# =========================
+back/.env
+.env
+*.env
+# Do not ignore SQL schema files
+!database/*.sql
+
+# =========================
+# ETL input/output data
+# =========================
+
+back/data/input/**
+!back/data/input/
+!back/data/input/.gitkeep
+
+back/data/processed/**
+!back/data/processed/
+!back/data/processed/.gitkeep
+
+# Generated Excel previews
+*.xlsx
+
+# Local project context
+original_conversation_*.json
+
+# Publication safeguard: municipal source files and generated evidence stay local.
+*.tsv
+*.xls
+*.parquet
+*.ndjson
+*.jsonl
+back/ETL/test_data/
+quality/evidencias/
+quality/entrega/
