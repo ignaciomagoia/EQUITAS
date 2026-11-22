@@ -4,6 +4,15 @@ export const LAFALDA_IMPORT_ERROR_TABLE = 'data_import_row_error'
 
 export type ImportMode = 'dry_run' | 'apply'
 
+export type ImportCreatePayload = {
+  action: 'create'
+  fileName: string
+  fileSize: number
+  contentHash: string
+  mode: ImportMode
+  forceNewDryRun: boolean
+}
+
 export type ImportAuthorization = {
   active: boolean
   canImport: boolean
@@ -30,6 +39,27 @@ export type ImportJob = {
 
 export function isImportMode(value: unknown): value is ImportMode {
   return value === 'dry_run' || value === 'apply'
+}
+
+export function buildImportCreatePayload(
+  fileName: string,
+  fileSize: number,
+  contentHash: string,
+  mode: ImportMode,
+  forceNewDryRun: boolean,
+): ImportCreatePayload {
+  return {
+    action: 'create',
+    fileName,
+    fileSize,
+    contentHash,
+    mode,
+    forceNewDryRun: mode === 'dry_run' && forceNewDryRun,
+  }
+}
+
+export function importModeLabel(mode: ImportMode) {
+  return mode === 'apply' ? 'Actualización real' : 'Simulación'
 }
 
 export function getLafaldaImportTenantId() {

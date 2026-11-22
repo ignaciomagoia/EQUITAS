@@ -6,7 +6,14 @@ import { AlertCircle, CheckCircle2, FileSpreadsheet, LoaderCircle, Upload } from
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { createBrowserSupabaseClient } from '@/lib/supabase-browser'
-import { calculateImportProgress, shouldUpdateSelectedImportDetail, type ImportJob } from '@/lib/imports'
+import {
+  buildImportCreatePayload,
+  calculateImportProgress,
+  importModeLabel,
+  shouldUpdateSelectedImportDetail,
+  type ImportJob,
+  type ImportMode,
+} from '@/lib/imports'
 import { cn } from '@/lib/utils'
 
 type ImportRowError = {
@@ -77,14 +84,16 @@ async function readApiError(response: Response) {
   return payload?.error ?? 'No se pudo completar la operacion solicitada.'
 }
 
-export function ImportPanel() {
+export function ImportPanel({ applyEnabled }: { applyEnabled: boolean }) {
   const [file, setFile] = useState<File | null>(null)
   const [jobs, setJobs] = useState<ImportJob[]>([])
   const [selectedJobId, setSelectedJobId] = useState<number | null>(null)
   const [selectedJob, setSelectedJob] = useState<ImportDetail | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [isSubmitting, setIsSubmitting] = useState(false)
+  const [importMode, setImportMode] = useState<ImportMode>('dry_run')
   const [forceNewDryRun, setForceNewDryRun] = useState(false)
+  const [applyConfirmed, setApplyConfirmed] = useState(false)
   const [message, setMessage] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const selectedJobIdRef = useRef<number | null>(null)
@@ -189,6 +198,11 @@ export function ImportPanel() {
       return
     }
 
+    if (importMode === 'apply' && !applyConfirmed) {
+      setError('Confirma que vas a aplicar una actualización real antes de continuar.')
+      return
+    }
+
     setIsSubmitting(true)
 
     try {
@@ -196,14 +210,9 @@ export function ImportPanel() {
       const createResponse = await fetch('/api/imports', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'create',
-          fileName: file.name,
-          fileSize: file.size,
-          contentHash,
-          mode: 'dry_run',
-          forceNewDryRun,
-        }),
+        body: JSON.stringify(
+          buildImportCreatePayload(file.name, file.size, contentHash, importMode, forceNewDryRun),
+        ),
       })
 
       if (!createResponse.ok) throw new Error(await readApiError(createResponse))
@@ -235,9 +244,14 @@ export function ImportPanel() {
       if (uploadResponse.error) throw new Error('No se pudo subir el CSV al almacenamiento privado.')
 
       await enqueueExistingJob(created.job.id, 'queue')
-      setMessage('Archivo recibido. El worker realizara la comparacion sin modificar deudas.')
+      setMessage(
+        importMode === 'apply'
+          ? 'Archivo recibido. La actualización real solo continuará si los controles del worker y de la base de datos están habilitados.'
+          : 'Archivo recibido. El worker realizará la comparación sin modificar deudas.',
+      )
       setFile(null)
       setForceNewDryRun(false)
+      setApplyConfirmed(false)
     } catch (submitError) {
       setError(submitError instanceof Error ? submitError.message : 'No se pudo iniciar la importacion.')
     } finally {
@@ -249,14 +263,57 @@ export function ImportPanel() {
     <div className="space-y-6">
       <Card>
         <CardHeader>
-          <CardTitle>Simular actualizacion diaria</CardTitle>
+          <CardTitle>{importMode === 'apply' ? 'Aplicar actualización diaria' : 'Simular actualización diaria'}</CardTitle>
           <CardDescription>
-            El primer paso compara el CSV con los datos de La Falda. No inserta ni modifica deudas.
+            {importMode === 'apply'
+              ? 'La aplicación real requiere autorización del usuario, worker habilitado y confirmación en la base de datos.'
+              : 'Compara el CSV con los datos de La Falda. No inserta ni modifica deudas.'}
           </CardDescription>
         </CardHeader>
         <CardContent>
           <form className="flex flex-col gap-4 md:flex-row md:items-end" onSubmit={submitFile}>
-            <div className="flex min-w-0 flex-1 flex-col gap-2">
+            <div className="flex min-w-0 flex-1 flex-col gap-3">
+              <fieldset className="grid gap-2">
+                <legend className="text-sm font-medium text-slate-700">Modo de importación</legend>
+                <label className="flex items-start gap-2 rounded-md border border-slate-200 bg-slate-50 p-2 text-xs text-slate-700">
+                  <input
+                    type="radio"
+                    name="import-mode"
+                    value="dry_run"
+                    checked={importMode === 'dry_run'}
+                    onChange={() => {
+                      setImportMode('dry_run')
+                      setApplyConfirmed(false)
+                    }}
+                    disabled={isSubmitting || hasActiveJob}
+                  />
+                  <span>
+                    <strong className="block text-slate-900">Simular (dry-run)</strong>
+                    Compara el archivo sin modificar deudas.
+                  </span>
+                </label>
+                {applyEnabled ? (
+                  <label className="flex items-start gap-2 rounded-md border border-amber-300 bg-amber-50 p-2 text-xs text-amber-950">
+                    <input
+                      type="radio"
+                      name="import-mode"
+                      value="apply"
+                      checked={importMode === 'apply'}
+                      onChange={() => {
+                        setImportMode('apply')
+                        setForceNewDryRun(false)
+                      }}
+                      disabled={isSubmitting || hasActiveJob}
+                    />
+                    <span>
+                      <strong className="block">Aplicar actualización real (apply)</strong>
+                      Actualiza únicamente las deudas identificadas en el CSV cuando todos los controles externos estén habilitados.
+                    </span>
+                  </label>
+                ) : (
+                  <p className="text-xs text-slate-500">La actualización real está deshabilitada en este entorno.</p>
+                )}
+              </fieldset>
               <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700">
                 Archivo CSV
                 <input
@@ -267,22 +324,34 @@ export function ImportPanel() {
                   disabled={isSubmitting || hasActiveJob}
                 />
                 <span className="text-xs font-normal text-slate-500">
-                  UTF-8, hasta 100 MB. Campos requeridos: tipo de bien, cuenta, identificador de deuda y montos.
+                  UTF-8, hasta 100 MB. Campos requeridos: tipo de bien, cuenta e identificador de deuda.
                 </span>
               </label>
-              <label className="flex items-center gap-2 text-xs font-normal text-slate-600">
-                <input
-                  type="checkbox"
-                  checked={forceNewDryRun}
-                  onChange={(event) => setForceNewDryRun(event.target.checked)}
-                  disabled={isSubmitting || hasActiveJob}
-                />
-                Ejecutar una nueva simulacion aunque el archivo ya figure en el historial.
-              </label>
+              {importMode === 'dry_run' ? (
+                <label className="flex items-center gap-2 text-xs font-normal text-slate-600">
+                  <input
+                    type="checkbox"
+                    checked={forceNewDryRun}
+                    onChange={(event) => setForceNewDryRun(event.target.checked)}
+                    disabled={isSubmitting || hasActiveJob}
+                  />
+                  Ejecutar una nueva simulación aunque el archivo ya figure en el historial.
+                </label>
+              ) : (
+                <label className="flex items-center gap-2 text-xs font-normal text-amber-950">
+                  <input
+                    type="checkbox"
+                    checked={applyConfirmed}
+                    onChange={(event) => setApplyConfirmed(event.target.checked)}
+                    disabled={isSubmitting || hasActiveJob}
+                  />
+                  Confirmo que revisé el resultado esperado y quiero solicitar la actualización real.
+                </label>
+              )}
             </div>
-            <Button type="submit" disabled={isSubmitting || hasActiveJob} className="shrink-0">
+            <Button type="submit" disabled={isSubmitting || hasActiveJob || (importMode === 'apply' && !applyConfirmed)} className="shrink-0">
               {isSubmitting ? <LoaderCircle className="size-4 animate-spin" /> : <Upload className="size-4" />}
-              Ejecutar simulacion
+              {importMode === 'apply' ? 'Solicitar actualización real' : 'Ejecutar simulación'}
             </Button>
           </form>
           {hasActiveJob ? (
@@ -340,7 +409,12 @@ export function ImportPanel() {
                             {formatDate(job.created_at)} · {formatFileSize(job.file_size_bytes)}
                           </p>
                         </div>
-                        <span className="shrink-0 text-xs font-medium text-[#163a63]">{statusLabel(job.status)}</span>
+                        <div className="flex shrink-0 flex-col items-end gap-1 text-xs font-medium">
+                          <span className={cn('rounded-full px-2 py-0.5', job.mode === 'apply' ? 'bg-amber-100 text-amber-900' : 'bg-slate-100 text-slate-700')}>
+                            {importModeLabel(job.mode)}
+                          </span>
+                          <span className="text-[#163a63]">{statusLabel(job.status)}</span>
+                        </div>
                       </div>
                       <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-slate-200">
                         <div className="h-full rounded-full bg-[#163a63] transition-all" style={{ width: `${progress}%` }} />
@@ -367,7 +441,12 @@ export function ImportPanel() {
             ) : (
               <div className="space-y-4">
                 <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
-                  <p className="text-sm font-semibold text-slate-900">{statusLabel(selectedJob.job.status)}</p>
+                    <div className="flex items-center justify-between gap-3">
+                      <p className="text-sm font-semibold text-slate-900">{statusLabel(selectedJob.job.status)}</p>
+                      <span className={cn('rounded-full px-2 py-0.5 text-xs font-medium', selectedJob.job.mode === 'apply' ? 'bg-amber-100 text-amber-900' : 'bg-slate-200 text-slate-700')}>
+                        {importModeLabel(selectedJob.job.mode)}
+                      </span>
+                    </div>
                   <div className="mt-3 grid grid-cols-2 gap-2 text-sm">
                     <p className="text-slate-600">Nuevas <strong className="float-right text-slate-900">{selectedJob.job.inserted_rows}</strong></p>
                     <p className="text-slate-600">Actualizadas <strong className="float-right text-slate-900">{selectedJob.job.updated_rows}</strong></p>
@@ -392,7 +471,7 @@ export function ImportPanel() {
                 ) : null}
                 {selectedJob.job.status === 'FAILED' ? (
                   <Button size="sm" variant="outline" onClick={() => void enqueueExistingJob(selectedJob.job.id, 'retry')}>
-                    Reintentar simulacion
+                    {selectedJob.job.mode === 'apply' ? 'Reintentar actualización real' : 'Reintentar simulación'}
                   </Button>
                 ) : null}
                 {selectedJob.errors.length ? (
@@ -416,7 +495,7 @@ export function ImportPanel() {
 
       <p className="flex items-start gap-2 text-xs text-slate-500">
         <FileSpreadsheet className="mt-0.5 size-4 shrink-0" />
-        La aplicacion no elimina obligaciones que no aparezcan en el archivo. La aplicacion definitiva queda bloqueada hasta validar el resultado de la simulacion y autorizarla expresamente.
+        La aplicación no elimina obligaciones que no aparezcan en el archivo. Una actualización real requiere autorización del usuario y controles habilitados en Vercel, GitHub Actions y Supabase.
       </p>
     </div>
   )

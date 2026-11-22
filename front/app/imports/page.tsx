@@ -2,6 +2,9 @@ import { FileUp } from 'lucide-react'
 
 import { ImportPanel } from '@/components/imports/import-panel'
 import { AppShell } from '@/components/layout/app-shell'
+import { isLafaldaApplyEnabled } from '@/lib/imports'
+
+export const dynamic = 'force-dynamic'
 
 export default function ImportsPage() {
   return (
@@ -18,7 +21,7 @@ export default function ImportsPage() {
         </div>
       </section>
 
-      <ImportPanel />
+      <ImportPanel applyEnabled={isLafaldaApplyEnabled()} />
     </AppShell>
   )
 }

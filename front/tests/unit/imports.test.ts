@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+  buildImportCreatePayload,
   calculateImportProgress,
   canUseImportMode,
+  importModeLabel,
   isImportMode,
   shouldUpdateSelectedImportDetail,
 } from '@/lib/imports'
@@ -13,6 +15,19 @@ describe('import CSV helpers', () => {
     expect(isImportMode('dry_run')).toBe(true)
     expect(isImportMode('apply')).toBe(true)
     expect(isImportMode('preview')).toBe(false)
+  })
+
+  it('builds an apply payload without dry-run retry flags', () => {
+    // Arrange / Act
+    const payload = buildImportCreatePayload('actualizacion.csv', 512, 'a'.repeat(64), 'apply', true)
+
+    // Assert
+    expect(payload).toMatchObject({
+      action: 'create',
+      mode: 'apply',
+      forceNewDryRun: false,
+    })
+    expect(importModeLabel(payload.mode)).toBe('Actualización real')
   })
 
   it('reports staged progress without declaring completion early', () => {
