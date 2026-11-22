@@ -138,12 +138,44 @@ def test_testing_worker_applies_changes_idempotently_and_recalculates_profiles(
         new_debt_id = _fixture_int(fixture, "debt_new_external_id")
 
         first_job_id = _queue_job(client, content, first_storage_path, fixture_user_id)
+        recalculate_profiles = worker._recalculate_profiles
+        monkeypatch.setattr(
+            worker,
+            "_recalculate_profiles",
+            lambda *_args: (_ for _ in ()).throw(RuntimeError("fallo simulado de perfiles")),
+        )
+
+        assert worker.process_once() is True
+
+        pending_profile_recalculation = _single(
+            client.table("data_import_job")
+            .select(
+                "status,inserted_rows,updated_rows,unchanged_rows,rejected_rows,"
+                "merge_completed_at,profiles_recalculated_at,profile_recalculation_error"
+            )
+            .eq("id", first_job_id)
+            .single()
+            .execute()
+        )
+        assert pending_profile_recalculation["status"] == "RECALCULATING_PROFILES"
+        assert pending_profile_recalculation["inserted_rows"] == 1
+        assert pending_profile_recalculation["updated_rows"] == 2
+        assert pending_profile_recalculation["unchanged_rows"] == 0
+        assert pending_profile_recalculation["rejected_rows"] == 0
+        assert pending_profile_recalculation["merge_completed_at"] is not None
+        assert pending_profile_recalculation["profiles_recalculated_at"] is None
+        assert pending_profile_recalculation["profile_recalculation_error"] == "fallo simulado de perfiles"
+
+        monkeypatch.setattr(worker, "_recalculate_profiles", recalculate_profiles)
 
         assert worker.process_once() is True
 
         first_job = _single(
             client.table("data_import_job")
-            .select("status,inserted_rows,updated_rows,unchanged_rows,rejected_rows")
+            .select(
+                "status,inserted_rows,updated_rows,unchanged_rows,rejected_rows,"
+                "merge_completed_at,profiles_recalculated_at,profile_recalculation_error"
+            )
             .eq("id", first_job_id)
             .single()
             .execute()
@@ -202,13 +234,14 @@ def test_testing_worker_applies_changes_idempotently_and_recalculates_profiles(
             .data
         )
 
-        assert first_job == {
-            "status": "COMPLETED",
-            "inserted_rows": 1,
-            "updated_rows": 2,
-            "unchanged_rows": 0,
-            "rejected_rows": 0,
-        }
+        assert first_job["status"] == "COMPLETED"
+        assert first_job["inserted_rows"] == 1
+        assert first_job["updated_rows"] == 2
+        assert first_job["unchanged_rows"] == 0
+        assert first_job["rejected_rows"] == 0
+        assert first_job["merge_completed_at"] is not None
+        assert first_job["profiles_recalculated_at"] is not None
+        assert first_job["profile_recalculation_error"] is None
         assert updated == {
             "description": "Deuda actualizada",
             "original_amount": 80,
