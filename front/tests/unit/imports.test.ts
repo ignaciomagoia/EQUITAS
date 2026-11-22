@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest'
 
-import { calculateImportProgress, isImportMode, shouldUpdateSelectedImportDetail } from '@/lib/imports'
+import {
+  calculateImportProgress,
+  canUseImportMode,
+  isImportMode,
+  shouldUpdateSelectedImportDetail,
+} from '@/lib/imports'
 
 describe('import CSV helpers', () => {
   it('accepts only supported import modes', () => {
@@ -36,5 +41,27 @@ describe('import CSV helpers', () => {
     expect(shouldUpdateSelectedImportDetail(selectedJobId, 13, true)).toBe(false)
     expect(shouldUpdateSelectedImportDetail(selectedJobId, 24, false)).toBe(false)
     expect(shouldUpdateSelectedImportDetail(selectedJobId, 24, true)).toBe(true)
+  })
+
+  it('requires an explicit active authorization even for dry runs', () => {
+    // Arrange
+    const authorized = { active: true, canImport: true, canApply: false }
+
+    // Act / Assert
+    expect(canUseImportMode(null, 'dry_run')).toBe(false)
+    expect(canUseImportMode({ ...authorized, active: false }, 'dry_run')).toBe(false)
+    expect(canUseImportMode({ ...authorized, canImport: false }, 'dry_run')).toBe(false)
+    expect(canUseImportMode(authorized, 'dry_run')).toBe(true)
+  })
+
+  it('requires both the database feature flag and the user permission for apply', () => {
+    // Arrange
+    const canImportOnly = { active: true, canImport: true, canApply: false }
+    const canApply = { active: true, canImport: true, canApply: true }
+
+    // Act / Assert
+    expect(canUseImportMode(canImportOnly, 'apply', true)).toBe(false)
+    expect(canUseImportMode(canApply, 'apply', false)).toBe(false)
+    expect(canUseImportMode(canApply, 'apply', true)).toBe(true)
   })
 })

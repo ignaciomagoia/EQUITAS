@@ -277,7 +277,7 @@ class LafaldaDailyCsvWorker:
         tenant_debtor_ids = self._fetch_tenant_debtor_ids(tenant_id)
         all_profiles = self._fetch_rows_by_ids(
             "debtor_profile",
-            "debtor,total_debt_amount",
+            "id,debtor,total_debt_amount",
             "debtor",
             tenant_debtor_ids,
         )
@@ -332,6 +332,11 @@ class LafaldaDailyCsvWorker:
             for row in all_profiles
             if row.get("debtor") is not None
         }
+        profile_ids_by_debtor = {
+            int(row["debtor"]): int(row["id"])
+            for row in all_profiles
+            if row.get("debtor") is not None and row.get("id") is not None
+        }
 
         for debtor_id in affected_debtor_ids:
             total_by_debtor[debtor_id] = sum(
@@ -351,15 +356,17 @@ class LafaldaDailyCsvWorker:
             person_ids = {int(row["person"]) for row in relations if row.get("person") is not None}
             available_contact_count = sum(contacts_by_person[person_id] for person_id in person_ids)
 
-            profile_payloads.append(
-                build_debtor_profile_payload(
-                    debtor_id=debtor_id,
-                    debt_rows=debt_rows_by_debtor.get(debtor_id, []),
-                    active_person_count=len(person_ids),
-                    available_contact_count=available_contact_count,
-                    average_total_debt_amount=average_total_debt_amount,
-                )
+            profile_payload = build_debtor_profile_payload(
+                debtor_id=debtor_id,
+                debt_rows=debt_rows_by_debtor.get(debtor_id, []),
+                active_person_count=len(person_ids),
+                available_contact_count=available_contact_count,
+                average_total_debt_amount=average_total_debt_amount,
             )
+            existing_profile_id = profile_ids_by_debtor.get(debtor_id)
+            if existing_profile_id is not None:
+                profile_payload["id"] = existing_profile_id
+            profile_payloads.append(profile_payload)
 
         self._bulk_upsert("debtor_profile", profile_payloads, "debtor")
         refreshed_profiles = self._fetch_rows_by_ids(
@@ -374,6 +381,19 @@ class LafaldaDailyCsvWorker:
             if row.get("debtor") is not None and row.get("id") is not None
         }
         profile_detail_payloads: list[dict[str, Any]] = []
+        existing_profile_detail_rows = self._fetch_rows_by_ids(
+            "debtor_profile_detail",
+            "id,debtor_profile,person",
+            "debtor_profile",
+            [int(profile["id"]) for profile in profile_by_debtor.values() if profile.get("id") is not None],
+        )
+        profile_detail_ids_by_key = {
+            (int(row["debtor_profile"]), int(row["person"])): int(row["id"])
+            for row in existing_profile_detail_rows
+            if row.get("id") is not None
+            and row.get("debtor_profile") is not None
+            and row.get("person") is not None
+        }
 
         for debtor_id, relations in relation_rows_by_debtor.items():
             profile = profile_by_debtor.get(debtor_id)
@@ -386,16 +406,19 @@ class LafaldaDailyCsvWorker:
                     continue
 
                 person_id = int(relation["person"])
-                profile_detail_payloads.append(
-                    build_debtor_profile_detail_payload(
-                        debtor_profile_id=int(profile["id"]),
-                        person_id=person_id,
-                        profile_risk_level=int(profile["socioeconomic_risk_level"]),
-                        person_contact_count=contacts_by_person[person_id],
-                        role=str(relation["role"]) if relation.get("role") else None,
-                        priority=parse_decimal(relation.get("priority")),
-                    )
+                profile_id = int(profile["id"])
+                profile_detail_payload = build_debtor_profile_detail_payload(
+                    debtor_profile_id=profile_id,
+                    person_id=person_id,
+                    profile_risk_level=int(profile["socioeconomic_risk_level"]),
+                    person_contact_count=contacts_by_person[person_id],
+                    role=str(relation["role"]) if relation.get("role") else None,
+                    priority=parse_decimal(relation.get("priority")),
                 )
+                existing_profile_detail_id = profile_detail_ids_by_key.get((profile_id, person_id))
+                if existing_profile_detail_id is not None:
+                    profile_detail_payload["id"] = existing_profile_detail_id
+                profile_detail_payloads.append(profile_detail_payload)
 
         self._bulk_upsert(
             "debtor_profile_detail",

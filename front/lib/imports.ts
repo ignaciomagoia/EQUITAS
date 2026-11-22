@@ -4,6 +4,12 @@ export const LAFALDA_IMPORT_ERROR_TABLE = 'data_import_row_error'
 
 export type ImportMode = 'dry_run' | 'apply'
 
+export type ImportAuthorization = {
+  active: boolean
+  canImport: boolean
+  canApply: boolean
+}
+
 export type ImportJob = {
   id: number
   file_name: string
@@ -34,6 +40,18 @@ export function getLafaldaImportTenantId() {
 
 export function isLafaldaApplyEnabled() {
   return process.env.LAFALDA_IMPORT_APPLY_ENABLED === 'true'
+}
+
+export function canUseImportMode(
+  authorization: ImportAuthorization | null,
+  mode: ImportMode,
+  applyEnabled = isLafaldaApplyEnabled(),
+) {
+  if (!authorization?.active || !authorization.canImport) {
+    return false
+  }
+
+  return mode === 'dry_run' || (applyEnabled && authorization.canApply)
 }
 
 export function shouldUpdateSelectedImportDetail(

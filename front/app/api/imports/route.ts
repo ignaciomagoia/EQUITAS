@@ -4,6 +4,7 @@ import {
   getLafaldaImportTenantId,
   isLafaldaApplyEnabled,
   isImportMode,
+  canUseImportMode,
   LAFALDA_IMPORT_BUCKET,
   LAFALDA_IMPORT_ERROR_TABLE,
   LAFALDA_IMPORT_JOB_TABLE,
@@ -74,7 +75,30 @@ async function getImportContext() {
     return { error: jsonError('La importacion solo esta habilitada para La Falda.', 403) }
   }
 
-  return { adminClient, tenantId, appUserId }
+  const authorizationResponse = await adminClient
+    .from('data_import_authorization')
+    .select('active,can_import,can_apply')
+    .eq('tenant', tenantId)
+    .eq('app_user', appUserId)
+    .maybeSingle()
+
+  if (authorizationResponse.error) {
+    return { error: jsonError('No se pudo validar la autorizacion de importacion.', 503) }
+  }
+
+  const authorization = authorizationResponse.data
+    ? {
+        active: authorizationResponse.data.active,
+        canImport: authorizationResponse.data.can_import,
+        canApply: authorizationResponse.data.can_apply,
+      }
+    : null
+
+  if (!canUseImportMode(authorization, 'dry_run')) {
+    return { error: jsonError('No tenes una autorizacion activa para importar archivos.', 403) }
+  }
+
+  return { adminClient, tenantId, appUserId, authorization }
 }
 
 export async function GET(request: Request) {
@@ -173,7 +197,7 @@ export async function POST(request: Request) {
       return jsonError('La importacion no se encuentra en un estado que permita encolarla.', 409)
     }
 
-    if (existingResponse.data.mode === 'apply' && !isLafaldaApplyEnabled()) {
+    if (!canUseImportMode(context.authorization, existingResponse.data.mode, isLafaldaApplyEnabled())) {
       return jsonError('Las importaciones confirmadas no estan habilitadas.', 403)
     }
 
@@ -233,7 +257,7 @@ export async function POST(request: Request) {
     return jsonError('El modo de importacion no es valido.', 400)
   }
 
-  if (mode === 'apply' && !isLafaldaApplyEnabled()) {
+  if (!canUseImportMode(context.authorization, mode, isLafaldaApplyEnabled())) {
     return jsonError('Las importaciones confirmadas no estan habilitadas.', 403)
   }
 

@@ -10,11 +10,60 @@ from ETL.daily_csv_import import (
 )
 from ETL.transform import build_daily_csv_debt_payload
 
-TEST_DATA_DIR = Path(__file__).resolve().parents[1] / "ETL" / "test_data"
+
+def _write_csv_fixture(path: Path, second_day: bool = False) -> Path:
+    rows: list[dict[str, object]] = []
+
+    for index in range(1, 16):
+        current_amount = index * 100
+        if second_day and index in {1, 2, 3}:
+            current_amount += 25
+
+        rows.append(
+            {
+                "Bien_Tipo_Id": 1,
+                "Cuenta": 700000 + index,
+                "DEUD_id": 900000 + index,
+                "tipo_deuda": "inmueble",
+                "descripcion": f"Deuda de prueba {index}",
+                "NOTD_capital": index * 80,
+                "NOTD_totalActualizado": current_amount,
+                "NOTD_vencimiento": "2025-02-01",
+                "fecha_emision": "2025-01-01",
+                "fecha_ultima_gestion": "2025-02-15",
+                "periodo": "2025-01",
+                "estado": 2,
+                "moneda": 1,
+                "columna_extra_ignorar": "ignorada",
+            }
+        )
+
+    if second_day:
+        rows.append(
+            {
+                "Bien_Tipo_Id": 1,
+                "Cuenta": 700001,
+                "DEUD_id": 900016,
+                "tipo_deuda": "inmueble",
+                "descripcion": "Deuda nueva de prueba",
+                "NOTD_capital": 80,
+                "NOTD_totalActualizado": 100,
+                "NOTD_vencimiento": "2025-02-01",
+                "fecha_emision": "2025-01-01",
+                "fecha_ultima_gestion": "2025-02-15",
+                "periodo": "2025-01",
+                "estado": 2,
+                "moneda": 1,
+                "columna_extra_ignorar": "ignorada",
+            }
+        )
+
+    pd.DataFrame(rows).to_csv(path, index=False)
+    return path
 
 
-def _existing_debts_from_first_file():
-    first_day = parse_daily_csv(TEST_DATA_DIR / "lafalda_dia_1_basado_en_supabase.csv")
+def _existing_debts_from_first_file(first_file: Path):
+    first_day = parse_daily_csv(first_file)
     debtor_ids_by_key = {
         (int(row["debtor_type"]), int(row["debtor_external_id"])): 1
         for row in first_day.stage_rows
@@ -27,9 +76,9 @@ def _existing_debts_from_first_file():
     return debtor_ids_by_key, existing_debts_by_key
 
 
-def test_daily_csv_ignores_extra_columns_and_preserves_expected_rows():
+def test_daily_csv_ignores_extra_columns_and_preserves_expected_rows(tmp_path: Path):
     # Arrange
-    file_path = TEST_DATA_DIR / "lafalda_dia_2_actualizado_prueba.csv"
+    file_path = _write_csv_fixture(tmp_path / "dia_2.csv", second_day=True)
 
     # Act
     result = parse_daily_csv(file_path)
@@ -41,10 +90,12 @@ def test_daily_csv_ignores_extra_columns_and_preserves_expected_rows():
     assert result.ignored_columns == ["columna_extra_ignorar"]
 
 
-def test_daily_csv_second_file_detects_new_modified_and_unchanged_debts():
+def test_daily_csv_second_file_detects_new_modified_and_unchanged_debts(tmp_path: Path):
     # Arrange
-    debtor_ids_by_key, existing_debts_by_key = _existing_debts_from_first_file()
-    second_day = parse_daily_csv(TEST_DATA_DIR / "lafalda_dia_2_actualizado_prueba.csv")
+    first_file = _write_csv_fixture(tmp_path / "dia_1.csv")
+    second_file = _write_csv_fixture(tmp_path / "dia_2.csv", second_day=True)
+    debtor_ids_by_key, existing_debts_by_key = _existing_debts_from_first_file(first_file)
+    second_day = parse_daily_csv(second_file)
 
     # Act
     comparison = compare_daily_csv_rows(second_day, debtor_ids_by_key, existing_debts_by_key)
