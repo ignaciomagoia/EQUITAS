@@ -1,75 +1,20 @@
-name: Prueba aislada de apply CSV
+name: Retirado - apply CSV La Falda en Testing
 
+# EQUITAS-TP-TESTING se reserva para la futura plataforma multiinstitucion.
+# Se conserva el archivo como registro historico, sin secretos ni conexiones.
 on:
   workflow_dispatch:
-    inputs:
-      project_ref:
-        description: Project ref de EQUITAS-TP-TESTING para confirmar el destino
-        required: true
-        type: string
 
 permissions:
   contents: read
 
-concurrency:
-  group: lafalda-csv-apply-testing
-  cancel-in-progress: false
-
 jobs:
-  apply-testing:
-    name: Apply sintetico en Supabase Testing
+  retired:
+    name: Integracion La Falda retirada
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    env:
-      EQUITAS_RUN_TESTING_APPLY_TESTS: 'true'
-      EQUITAS_TESTING_SUPABASE_URL: ${{ secrets.SUPABASE_TESTING_URL }}
-      EQUITAS_TESTING_SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_TESTING_SERVICE_ROLE_KEY }}
-      EQUITAS_TESTING_SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_TESTING_PROJECT_REF }}
-      SUPABASE_URL: ${{ secrets.SUPABASE_TESTING_URL }}
-      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_TESTING_SERVICE_ROLE_KEY }}
-      LAFALDA_IMPORT_TENANT_ID: '1'
-      LAFALDA_IMPORT_APPLY_ENABLED: 'true'
-      REQUESTED_PROJECT_REF: ${{ inputs.project_ref }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version-file: back/.python-version
-          cache: pip
-          cache-dependency-path: |
-            back/requirements.txt
-            back/requirements-dev.txt
-            back/constraints.txt
-      - name: Validar destino de testing sin exponer secretos
+      - name: Informar retiro seguro
         run: |
-          python - <<'PY'
-          import os
-          from urllib.parse import urlparse
-
-          project_ref = os.environ["EQUITAS_TESTING_SUPABASE_PROJECT_REF"].strip()
-          requested_ref = os.environ["REQUESTED_PROJECT_REF"].strip()
-          url = os.environ["EQUITAS_TESTING_SUPABASE_URL"].strip()
-          host = urlparse(url).hostname or ""
-
-          if not project_ref or requested_ref != project_ref:
-              raise SystemExit("El project ref confirmado no coincide con el secreto de testing.")
-          if host.lower() != f"{project_ref.lower()}.supabase.co":
-              raise SystemExit("La URL no pertenece al proyecto de testing confirmado.")
-          print("Destino de testing validado.")
-          PY
-      - name: Instalar dependencias de prueba
-        working-directory: back
-        run: python -m pip install --requirement requirements-dev.txt --constraint constraints.txt
-      - name: Ejecutar unica prueba de apply sintetico
-        working-directory: back
-        run: python -m pytest tests/integration/test_supabase_testing_apply_worker.py -q --junitxml=../.quality/testing-apply/junit.xml
-      - name: Conservar resultado de testing
-        if: always()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: lafalda-apply-testing-${{ github.run_id }}-${{ github.run_attempt }}
-          path: .quality/testing-apply/
-          if-no-files-found: warn
-          retention-days: 30
+          echo "La prueba aislada de apply de La Falda fue retirada."
+          echo "EQUITAS-TP-TESTING se prepara para Multiinstitucion."
+          echo "No se usaron secretos ni se realizo ninguna conexion remota."
