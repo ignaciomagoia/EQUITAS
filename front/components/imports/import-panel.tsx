@@ -263,12 +263,8 @@ export function ImportPanel({ applyEnabled }: { applyEnabled: boolean }) {
     <div className="space-y-6">
       <Card>
         <CardHeader>
-          <CardTitle>{importMode === 'apply' ? 'Aplicar actualización diaria' : 'Simular actualización diaria'}</CardTitle>
-          <CardDescription>
-            {importMode === 'apply'
-              ? 'La aplicación real requiere autorización del usuario, worker habilitado y confirmación en la base de datos.'
-              : 'Compara el CSV con los datos de La Falda. No inserta ni modifica deudas.'}
-          </CardDescription>
+          <CardTitle>Importar archivo de deudas</CardTitle>
+          <CardDescription>Seleccioná cómo querés procesar el archivo.</CardDescription>
         </CardHeader>
         <CardContent>
           <form className="flex flex-col gap-4 md:flex-row md:items-end" onSubmit={submitFile}>
@@ -288,8 +284,8 @@ export function ImportPanel({ applyEnabled }: { applyEnabled: boolean }) {
                     disabled={isSubmitting || hasActiveJob}
                   />
                   <span>
-                    <strong className="block text-slate-900">Simular (dry-run)</strong>
-                    Compara el archivo sin modificar deudas.
+                    <strong className="block text-slate-900">Simular actualización</strong>
+                    Permite revisar los cambios sin modificar las deudas.
                   </span>
                 </label>
                 {applyEnabled ? (
@@ -306,12 +302,12 @@ export function ImportPanel({ applyEnabled }: { applyEnabled: boolean }) {
                       disabled={isSubmitting || hasActiveJob}
                     />
                     <span>
-                      <strong className="block">Aplicar actualización real (apply)</strong>
-                      Actualiza únicamente las deudas identificadas en el CSV cuando todos los controles externos estén habilitados.
+                      <strong className="block">Actualizar deudas</strong>
+                      Aplica los cambios del archivo a las deudas existentes.
                     </span>
                   </label>
                 ) : (
-                  <p className="text-xs text-slate-500">La actualización real está deshabilitada en este entorno.</p>
+                  <p className="text-xs text-slate-500">La actualización de deudas no está disponible en este momento.</p>
                 )}
               </fieldset>
               <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700">
@@ -323,9 +319,6 @@ export function ImportPanel({ applyEnabled }: { applyEnabled: boolean }) {
                   className="block w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm file:mr-3 file:border-0 file:bg-[#f6efdc] file:px-2 file:py-1 file:text-xs file:font-semibold file:text-[#5f4a19]"
                   disabled={isSubmitting || hasActiveJob}
                 />
-                <span className="text-xs font-normal text-slate-500">
-                  Separador coma o punto y coma; UTF-8, UTF-8 BOM o Windows-1252; hasta 100 MB. Campos requeridos: tipo de bien, cuenta e identificador de deuda.
-                </span>
               </label>
               {importMode === 'dry_run' ? (
                 <label className="flex items-center gap-2 text-xs font-normal text-slate-600">
@@ -351,7 +344,7 @@ export function ImportPanel({ applyEnabled }: { applyEnabled: boolean }) {
             </div>
             <Button type="submit" disabled={isSubmitting || hasActiveJob || (importMode === 'apply' && !applyConfirmed)} className="shrink-0">
               {isSubmitting ? <LoaderCircle className="size-4 animate-spin" /> : <Upload className="size-4" />}
-              {importMode === 'apply' ? 'Solicitar actualización real' : 'Ejecutar simulación'}
+              Ejecutar
             </Button>
           </form>
           {hasActiveJob ? (
@@ -379,7 +372,7 @@ export function ImportPanel({ applyEnabled }: { applyEnabled: boolean }) {
         <Card>
           <CardHeader>
             <CardTitle>Historial de importaciones</CardTitle>
-            <CardDescription>Los archivos iguales se detectan mediante su huella SHA-256.</CardDescription>
+            <CardDescription>Consultá las importaciones realizadas y sus resultados.</CardDescription>
           </CardHeader>
           <CardContent>
             {isLoading ? (
@@ -456,7 +449,7 @@ export function ImportPanel({ applyEnabled }: { applyEnabled: boolean }) {
                 </div>
                 {selectedJob.job.ignored_columns?.length ? (
                   <p className="text-xs text-slate-600">
-                    Columnas ignoradas: {selectedJob.job.ignored_columns.join(', ')}.
+                    Columnas del archivo no utilizadas: {selectedJob.job.ignored_columns.join(', ')}.
                   </p>
                 ) : null}
                 {selectedJob.job.error_message ? (
@@ -466,12 +459,12 @@ export function ImportPanel({ applyEnabled }: { applyEnabled: boolean }) {
                 ) : null}
                 {selectedJob.job.status === 'UPLOADING' ? (
                   <Button size="sm" variant="outline" onClick={() => void enqueueExistingJob(selectedJob.job.id, 'queue')}>
-                    Encolar archivo ya cargado
+                    Procesar archivo cargado
                   </Button>
                 ) : null}
                 {selectedJob.job.status === 'FAILED' ? (
                   <Button size="sm" variant="outline" onClick={() => void enqueueExistingJob(selectedJob.job.id, 'retry')}>
-                    {selectedJob.job.mode === 'apply' ? 'Reintentar actualización real' : 'Reintentar simulación'}
+                    {selectedJob.job.mode === 'apply' ? 'Reintentar actualización de deudas' : 'Reintentar simulación'}
                   </Button>
                 ) : null}
                 {selectedJob.errors.length ? (

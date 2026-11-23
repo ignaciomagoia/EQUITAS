@@ -59,7 +59,7 @@ export function buildImportCreatePayload(
 }
 
 export function importModeLabel(mode: ImportMode) {
-  return mode === 'apply' ? 'Actualización real' : 'Simulación'
+  return mode === 'apply' ? 'Actualizar deudas' : 'Simular actualización'
 }
 
 export function getLafaldaImportTenantId() {

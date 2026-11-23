@@ -27,7 +27,7 @@ describe('import CSV helpers', () => {
       mode: 'apply',
       forceNewDryRun: false,
     })
-    expect(importModeLabel(payload.mode)).toBe('Actualización real')
+    expect(importModeLabel(payload.mode)).toBe('Actualizar deudas')
   })
 
   it('reports staged progress without declaring completion early', () => {
