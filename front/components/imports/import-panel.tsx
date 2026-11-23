@@ -324,7 +324,7 @@ export function ImportPanel({ applyEnabled }: { applyEnabled: boolean }) {
                   disabled={isSubmitting || hasActiveJob}
                 />
                 <span className="text-xs font-normal text-slate-500">
-                  UTF-8, hasta 100 MB. Campos requeridos: tipo de bien, cuenta e identificador de deuda.
+                  Separador coma o punto y coma; UTF-8, UTF-8 BOM o Windows-1252; hasta 100 MB. Campos requeridos: tipo de bien, cuenta e identificador de deuda.
                 </span>
               </label>
               {importMode === 'dry_run' ? (

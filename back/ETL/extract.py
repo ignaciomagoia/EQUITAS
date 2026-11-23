@@ -1,5 +1,6 @@
-from io import StringIO
+import csv
 from dataclasses import dataclass
+from io import StringIO
 from pathlib import Path
 
 import pandas as pd
@@ -40,34 +41,74 @@ def read_tsv(path: Path) -> pd.DataFrame:
 
 
 def read_csv(path: Path) -> pd.DataFrame:
-    """Lee un CSV UTF-8 de importaciÃ³n diaria sin inferir tipos de datos."""
+    """Lee un CSV diario con separador y codificaciÃ³n compatibles con Excel."""
 
     if not path.is_file():
         raise ValueError(f"La ruta no corresponde a un archivo: {path}")
 
-    return pd.read_csv(
-        path,
-        sep=",",
-        dtype=str,
-        encoding="utf-8-sig",
-        keep_default_na=False,
+    return read_csv_bytes(path.read_bytes())
+
+
+def _decode_csv_content(content: bytes) -> tuple[str, str]:
+    """Decodifica UTF-8 (con o sin BOM) y, solo como fallback, Windows-1252."""
+
+    for encoding in ("utf-8-sig", "cp1252"):
+        try:
+            return content.decode(encoding), encoding
+        except UnicodeDecodeError:
+            continue
+
+    raise ValueError(
+        "El CSV debe estar codificado en UTF-8 (con o sin BOM) o Windows-1252."
     )
+
+
+def _detect_csv_delimiter(decoded_content: str) -> str:
+    """Detecta coma o punto y coma usando la cabecera, sin adivinar empates."""
+
+    header_line = next(
+        (line for line in decoded_content.splitlines() if line.strip()),
+        None,
+    )
+
+    if header_line is None:
+        raise ValueError("El CSV esta vacio.")
+
+    comma_count = header_line.count(",")
+    semicolon_count = header_line.count(";")
+
+    if comma_count == semicolon_count:
+        raise ValueError(
+            "No se pudo detectar el separador del CSV. Use coma (,) o punto y coma (;)."
+        )
+
+    return "," if comma_count > semicolon_count else ";"
 
 
 def read_csv_bytes(content: bytes) -> pd.DataFrame:
     """Lee el contenido descargado desde Storage para el worker de importaciÃ³n."""
 
     try:
-        decoded_content = content.decode("utf-8-sig")
-    except UnicodeDecodeError as error:
-        raise ValueError("El CSV debe estar codificado en UTF-8.") from error
+        decoded_content, encoding = _decode_csv_content(content)
+        separator = _detect_csv_delimiter(decoded_content)
+        dataframe = pd.read_csv(
+            StringIO(decoded_content),
+            sep=separator,
+            dtype=str,
+            keep_default_na=False,
+        )
+    except pd.errors.ParserError as error:
+        raise ValueError("El CSV tiene una estructura invalida.") from error
 
-    return pd.read_csv(
-        StringIO(decoded_content),
-        sep=",",
-        dtype=str,
-        keep_default_na=False,
-    )
+    # Pandas puede renombrar cabeceras repetidas. Conservamos las originales para
+    # que el importador diario pueda detectar una ambigÃ¼edad antes de mapearlas.
+    header_line = next(line for line in decoded_content.splitlines() if line.strip())
+    raw_headers = next(csv.reader([header_line], delimiter=separator), [])
+    dataframe.attrs["equitas_csv_encoding"] = encoding
+    dataframe.attrs["equitas_csv_separator"] = separator
+    dataframe.attrs["equitas_csv_headers"] = raw_headers
+
+    return dataframe
 
 
 # Extrae los archivos de cabecera y detalle a partir de las rutas dadas.

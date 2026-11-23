@@ -8,7 +8,9 @@ o una importaciÃ³n confirmada.
 from __future__ import annotations
 
 import re
+import unicodedata
 from dataclasses import dataclass
+from datetime import datetime
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
@@ -18,9 +20,7 @@ import pandas as pd
 from ETL.extract import read_csv, read_csv_bytes
 from ETL.load import debt_values_are_equal
 from ETL.transform import (
-    build_daily_csv_debt_payload,
     clean_text,
-    parse_date,
     parse_int,
 )
 
@@ -48,6 +48,29 @@ DAILY_CSV_OPTIONAL_COLUMNS = frozenset(
 )
 
 DAILY_CSV_KNOWN_COLUMNS = DAILY_CSV_REQUIRED_COLUMNS | DAILY_CSV_OPTIONAL_COLUMNS
+
+# Alias explÃ­citos: los nombres originales siguen siendo la referencia y no se
+# intenta inferir columnas que no estÃ©n listadas aquÃ­.
+DAILY_CSV_COLUMN_ALIASES = {
+    "Bien_Tipo_Id": {"Tipo_Bien_Id", "Id_Tipo_Bien"},
+    "Cuenta": {"Cuenta_Id", "Numero_Cuenta", "Nro_Cuenta"},
+    "DEUD_id": {"Deuda_Id", "Id_Deuda", "Numero_Deuda", "Nro_Deuda"},
+    "NOTD_capital": {"Capital", "Importe_Original", "Monto_Original"},
+    "NOTD_totalActualizado": {
+        "Total_Actualizado",
+        "Importe_Actualizado",
+        "Monto_Actualizado",
+        "Saldo_Actualizado",
+    },
+    "tipo_deuda": {"Tipo_Deuda"},
+    "descripcion": {"Descripcion", "Detalle", "Concepto"},
+    "NOTD_vencimiento": {"Vencimiento", "Fecha_Vencimiento"},
+    "fecha_emision": {"Emision", "Fecha_Emision"},
+    "fecha_ultima_gestion": {"Ultima_Gestion", "Fecha_Ultima_Gestion"},
+    "periodo": {"Periodo_Deuda"},
+    "estado": {"Estado_Deuda"},
+    "moneda": {"Moneda_Id"},
+}
 
 STAGE_TO_DEBT_COLUMN = {
     "debt_type": "type",
@@ -89,6 +112,37 @@ class DailyCsvComparison:
     unknown_debtors: int
 
 
+def normalize_daily_csv_header(value: object) -> str:
+    """Normaliza mayÃºsculas, espacios, guiones y acentos de una cabecera."""
+
+    text = unicodedata.normalize("NFKD", str(value).strip().casefold())
+    return "".join(
+        character
+        for character in text
+        if unicodedata.category(character) != "Mn" and character.isalnum()
+    )
+
+
+def _build_header_aliases() -> dict[str, str]:
+    aliases: dict[str, str] = {}
+
+    for canonical_name in DAILY_CSV_KNOWN_COLUMNS:
+        names = {canonical_name, *DAILY_CSV_COLUMN_ALIASES.get(canonical_name, set())}
+        for name in names:
+            normalized_name = normalize_daily_csv_header(name)
+            previous_name = aliases.get(normalized_name)
+            if previous_name is not None and previous_name != canonical_name:
+                raise RuntimeError(
+                    f"El alias de cabecera {name!r} coincide con {previous_name!r} y {canonical_name!r}."
+                )
+            aliases[normalized_name] = canonical_name
+
+    return aliases
+
+
+DAILY_CSV_HEADER_ALIASES = _build_header_aliases()
+
+
 def _parse_identifier(value: Any, field_name: str) -> int:
     text = clean_text(value)
 
@@ -111,13 +165,42 @@ def _parse_decimal_strict(value: Any, field_name: str) -> float:
 
     normalized = text.replace(" ", "")
 
+    if normalized.startswith("-"):
+        raise ValueError(f"{field_name} debe ser un importe no negativo.")
+
+    if not re.fullmatch(r"[0-9.,]+", normalized):
+        raise ValueError(f"{field_name} no es un importe valido.")
+
     if "," in normalized and "." in normalized:
-        if normalized.rfind(",") > normalized.rfind("."):
+        if re.fullmatch(r"\d{1,3}(?:\.\d{3})+,\d{1,2}", normalized):
             normalized = normalized.replace(".", "").replace(",", ".")
-        else:
+        elif re.fullmatch(r"\d{1,3}(?:,\d{3})+\.\d{1,2}", normalized):
             normalized = normalized.replace(",", "")
+        else:
+            raise ValueError(
+                f"{field_name} tiene un formato de importe ambiguo: {text!r}. "
+                "Use 1234,50 o 1.234,50."
+            )
     elif "," in normalized:
-        normalized = normalized.replace(",", ".")
+        if re.fullmatch(r"\d+,\d{1,2}", normalized):
+            normalized = normalized.replace(",", ".")
+        elif re.fullmatch(r"\d{1,3}(?:,\d{3}){2,}", normalized):
+            normalized = normalized.replace(",", "")
+        else:
+            raise ValueError(
+                f"{field_name} tiene un formato de importe ambiguo: {text!r}. "
+                "Use 1234,50 o 1.234,50."
+            )
+    elif "." in normalized:
+        if re.fullmatch(r"\d+\.\d{1,2}", normalized):
+            pass
+        elif re.fullmatch(r"\d{1,3}(?:\.\d{3}){2,}", normalized):
+            normalized = normalized.replace(".", "")
+        else:
+            raise ValueError(
+                f"{field_name} tiene un formato de importe ambiguo: {text!r}. "
+                "Use 1234,50 o 1.234,50."
+            )
 
     try:
         parsed = Decimal(normalized)
@@ -143,12 +226,27 @@ def _parse_optional_date(value: Any, field_name: str) -> str | None:
     if text is None:
         return None
 
-    parsed = parse_date(text)
+    formats = ("%Y-%m-%d", "%Y/%m/%d")
+    for date_format in formats:
+        try:
+            return datetime.strptime(text, date_format).date().isoformat()
+        except ValueError:
+            continue
 
-    if parsed is None:
-        raise ValueError(f"{field_name} no es una fecha vÃ¡lida.")
+    match = re.fullmatch(r"(\d{1,2})[/-](\d{1,2})[/-](\d{4})", text)
+    if match is None:
+        raise ValueError(f"{field_name} no es una fecha valida.")
 
-    return parsed
+    day, month, year = (int(part) for part in match.groups())
+    if day <= 12 and month <= 12 and day != month:
+        raise ValueError(
+            f"{field_name} tiene una fecha ambigua: {text!r}. Use AAAA-MM-DD."
+        )
+
+    try:
+        return datetime(year, month, day).date().isoformat()
+    except ValueError as error:
+        raise ValueError(f"{field_name} no es una fecha valida.") from error
 
 
 def _source_key(row: dict[str, Any]) -> dict[str, int | None]:
@@ -157,6 +255,46 @@ def _source_key(row: dict[str, Any]) -> dict[str, int | None]:
         "cuenta": parse_int(row.get("Cuenta")),
         "deud_id": parse_int(row.get("DEUD_id")),
     }
+
+
+def normalize_daily_csv_columns(dataframe: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
+    """Convierte cabeceras compatibles al nombre canÃ³nico y rechaza ambigÃ¼edades."""
+
+    source_headers = dataframe.attrs.get("equitas_csv_headers", list(dataframe.columns))
+    if not isinstance(source_headers, list) or len(source_headers) != len(dataframe.columns):
+        source_headers = list(dataframe.columns)
+
+    canonical_sources: dict[str, list[str]] = {}
+    normalized_columns: list[str] = []
+    ignored_columns: list[str] = []
+
+    for original_header in source_headers:
+        source_name = str(original_header)
+        canonical_name = DAILY_CSV_HEADER_ALIASES.get(normalize_daily_csv_header(source_name))
+
+        if canonical_name is None:
+            normalized_columns.append(source_name)
+            ignored_columns.append(source_name)
+            continue
+
+        canonical_sources.setdefault(canonical_name, []).append(source_name)
+        normalized_columns.append(canonical_name)
+
+    ambiguous_headers = {
+        canonical: source_names
+        for canonical, source_names in canonical_sources.items()
+        if len(source_names) > 1
+    }
+    if ambiguous_headers:
+        formatted = "; ".join(
+            f"{canonical}: {', '.join(source_names)}"
+            for canonical, source_names in sorted(ambiguous_headers.items())
+        )
+        raise ValueError(f"El CSV tiene encabezados ambiguos: {formatted}.")
+
+    normalized_dataframe = dataframe.copy()
+    normalized_dataframe.columns = normalized_columns
+    return normalized_dataframe, sorted(ignored_columns)
 
 
 def validate_daily_csv_columns(dataframe: pd.DataFrame) -> list[str]:
@@ -175,12 +313,13 @@ def validate_daily_csv_columns(dataframe: pd.DataFrame) -> list[str]:
 def build_daily_stage_rows(dataframe: pd.DataFrame) -> DailyCsvParseResult:
     """Valida y normaliza el formato diario sin resolver IDs internos."""
 
-    ignored_columns = validate_daily_csv_columns(dataframe)
+    normalized_dataframe, ignored_columns = normalize_daily_csv_columns(dataframe)
+    validate_daily_csv_columns(normalized_dataframe)
     stage_rows: list[dict[str, Any]] = []
     errors: list[ImportRowError] = []
     seen_keys: set[tuple[int, int, int]] = set()
 
-    for source_row, raw_row in enumerate(dataframe.to_dict(orient="records"), start=2):
+    for source_row, raw_row in enumerate(normalized_dataframe.to_dict(orient="records"), start=2):
         row = {str(key): value for key, value in raw_row.items()}
         source_key = _source_key(row)
 
@@ -200,7 +339,11 @@ def build_daily_stage_rows(dataframe: pd.DataFrame) -> DailyCsvParseResult:
                 raise ValueError("La deuda se repite dentro del mismo CSV.")
 
             seen_keys.add(key)
-            payload = build_daily_csv_debt_payload(row)
+            # La importaciÃ³n diaria usa sus validadores estrictos para fechas e
+            # importes; no reutiliza el parser permisivo del ETL histÃ³rico.
+            debt_type = clean_text(row.get("tipo_deuda"))
+            description = clean_text(row.get("descripcion"))
+            period = clean_text(row.get("periodo"))
             provided_fields: list[str] = []
 
             if original_amount is not None:
@@ -219,7 +362,9 @@ def build_daily_stage_rows(dataframe: pd.DataFrame) -> DailyCsvParseResult:
                 ("estado", "status"),
                 ("moneda", "currency"),
             ):
-                if clean_text(row.get(source_column)) is not None:
+                # Columna ausente y celda opcional vacÃ­a no representan una
+                # actualizaciÃ³n. AsÃ­ el merge conserva el valor ya persistido.
+                if source_column in row and clean_text(row[source_column]) is not None:
                     provided_fields.append(stage_column)
 
             due_date = _parse_optional_date(row.get("NOTD_vencimiento"), "NOTD_vencimiento")
@@ -243,15 +388,15 @@ def build_daily_stage_rows(dataframe: pd.DataFrame) -> DailyCsvParseResult:
                     "debtor_type": debtor_type,
                     "debtor_external_id": debtor_external_id,
                     "debt_external_id": debt_external_id,
-                    "debt_type": payload["type"],
-                    "description": payload["description"],
+                    "debt_type": debt_type,
+                    "description": description,
                     "original_amount": original_amount,
                     "current_amount": current_amount,
                     "currency": currency,
                     "issue_date": issue_date,
                     "due_date": due_date,
                     "last_collection_date": last_collection_date,
-                    "period": payload["period"],
+                    "period": period,
                     "status": status,
                     "provided_fields": provided_fields,
                 }
