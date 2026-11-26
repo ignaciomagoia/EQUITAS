@@ -13,6 +13,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from quality.gate_probe import inject
 from quality.gates import (
+    EXPECTED_BASE_SHA,
     POLICY,
     added_lines,
     classify_findings,
@@ -31,6 +32,9 @@ DIFF = f'+++ b/{FRONT}\n@@ -0,0 +1,5 @@\n+a\n+b\n+c\n+d\n+e\n'
 
 
 class ThresholdTests(unittest.TestCase):
+    def test_policy_uses_the_repository_fixed_base(self):
+        self.assertEqual(read_json(POLICY)['base_sha'], EXPECTED_BASE_SHA)
+
     def test_new_coverage_7999_fails_and_80_passes(self):
         self.assertFalse(ratio(7999, 10000, 80)['passed'])
         self.assertTrue(ratio(8000, 10000, 80)['passed'])

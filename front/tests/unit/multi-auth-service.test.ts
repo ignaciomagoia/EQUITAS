@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 const { browserClient } = vi.hoisted(() => ({ browserClient: vi.fn() }))
 vi.mock('@/lib/supabase-browser', () => ({ createBrowserSupabaseClient: browserClient }))
 
-import { validateMultiInstitutionAccess } from '@/lib/services/multi-auth-service'
+import { validateCurrentMultiInstitutionAccess, validateMultiInstitutionAccess } from '@/lib/services/multi-auth-service'
 
 function createMultiClient({
   user = { id: 'user-1', status: 'ACTIVE' },
@@ -15,6 +15,7 @@ function createMultiClient({
     institution: { name: 'Universidad Demo', slug: 'universidad-demo' },
   },
   roles = [{ institution_role: { code: 'institution_admin' } }],
+  rolesError = null as unknown,
 }: {
   user?: { id: string; status: string } | null
   institutionId?: number | null
@@ -25,6 +26,7 @@ function createMultiClient({
     institution: { name: string; slug: string }
   } | null
   roles?: unknown[]
+  rolesError?: unknown
 } = {}) {
   const queries: string[] = []
   const client = {
@@ -36,7 +38,7 @@ function createMultiClient({
           select: vi.fn(() => roleQuery),
           eq: vi.fn(() => roleQuery),
           then: (resolve: (value: unknown) => unknown) =>
-            Promise.resolve({ data: roles, error: null }).then(resolve),
+          Promise.resolve({ data: roles, error: rolesError }).then(resolve),
         }
         return roleQuery
       }
@@ -80,6 +82,47 @@ describe('validacion de acceso multiinstitucion', () => {
     await expect(validateMultiInstitutionAccess('user-1', client as never)).resolves.toMatchObject({
       isAuthorized: false,
       code: 'INSTITUTION_ACCESS_NOT_FOUND',
+    })
+  })
+
+  it('rechaza configuraciones incompletas antes de exponer datos institucionales', async () => {
+    await expect(validateMultiInstitutionAccess('user-1', null as never)).resolves.toMatchObject({
+      isAuthorized: false, code: 'SUPABASE_NOT_CONFIGURED',
+    })
+
+    const inactive = createMultiClient({ user: { id: 'user-1', status: 'INACTIVE' } })
+    await expect(validateMultiInstitutionAccess('user-1', inactive.client as never)).resolves.toMatchObject({
+      isAuthorized: false, code: 'APP_USER_NOT_FOUND',
+    })
+
+    const noMembership = createMultiClient({ membership: null })
+    await expect(validateMultiInstitutionAccess('user-1', noMembership.client as never)).resolves.toMatchObject({
+      isAuthorized: false, code: 'INSTITUTION_ACCESS_NOT_FOUND',
+    })
+  })
+
+  it('rechaza una institucion mal formada o un error al consultar roles', async () => {
+    const malformedInstitution = createMultiClient({
+      membership: {
+        id: 22, institution_id: 10, status: 'ACTIVE',
+        institution: { name: 'Universidad Demo', slug: undefined as unknown as string },
+      },
+    })
+    await expect(validateMultiInstitutionAccess('user-1', malformedInstitution.client as never)).resolves.toMatchObject({
+      isAuthorized: false, code: 'INSTITUTION_ACCESS_NOT_FOUND',
+    })
+
+    const rolesFailure = createMultiClient({ rolesError: { message: 'RLS' } })
+    await expect(validateMultiInstitutionAccess('user-1', rolesFailure.client as never)).resolves.toMatchObject({
+      isAuthorized: false, code: 'DATABASE_ERROR',
+    })
+  })
+
+  it('requiere una sesion autentica al validar el acceso actual', async () => {
+    browserClient.mockReturnValue({ auth: { getUser: vi.fn(async () => ({ data: { user: null }, error: null })) } })
+
+    await expect(validateCurrentMultiInstitutionAccess()).resolves.toMatchObject({
+      isAuthorized: false, requiresLogin: true, code: 'AUTH_REQUIRED',
     })
   })
 })
