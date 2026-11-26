@@ -20,39 +20,56 @@ ROOT = Path(__file__).resolve().parents[2]
 class AuditPolicyTests(unittest.TestCase):
     def setUp(self):
         self.policy = json.loads((ROOT / 'quality/npm-audit-policy.json').read_text())
-        self.audit = json.loads((ROOT / 'quality/evidencias/e01/npm-audit-despues.json').read_text())
-        self.clean = json.loads((ROOT / 'quality/evidencias/e01/npm-audit-produccion.json').read_text())
+        self.audit = json.loads((ROOT / 'quality/evidencias/e01/npm-audit-despues.json').read_text(encoding='utf-8-sig'))
+        self.clean = json.loads((ROOT / 'quality/evidencias/e01/npm-audit-produccion.json').read_text(encoding='utf-8-sig'))
         self.lock = json.loads((ROOT / 'front/package-lock.json').read_text())
 
     def decision(self, **changes):
         values = {'audit': self.audit, 'production': self.clean, 'lock': self.lock, 'policy': self.policy,
-                  'raw_codes': [1, 0], 'today': date(2026, 10, 21)}
+                  'raw_codes': [0, 0], 'today': date(2026, 11, 26)}
         values.update(changes)
         return evaluate(**values)
 
-    def test_known_exception_keeps_raw_failure_visible(self):
+    def test_clean_audits_are_accepted_without_an_exception(self):
         decision = self.decision()
         self.assertTrue(decision['accepted'])
-        self.assertEqual(decision['raw_exit_codes']['all'], 1)
-        self.assertEqual(len(decision['accepted_packages']), 5)
+        self.assertEqual(decision['raw_exit_codes']['all'], 0)
+        self.assertEqual(decision['accepted_packages'], [])
+        self.assertIsNone(decision['exception'])
 
     def test_new_critical_finding_blocks(self):
-        self.audit['vulnerabilities']['braces']['severity'] = 'critical'
+        self.audit['vulnerabilities']['unexpected-package'] = {
+            'severity': 'critical',
+            'nodes': ['node_modules/unexpected-package'],
+            'via': [{'url': 'https://example.com/advisory', 'severity': 'critical'}],
+        }
+        self.audit['metadata']['vulnerabilities']['critical'] = 1
+        self.audit['metadata']['vulnerabilities']['total'] = 1
         self.assertFalse(self.decision()['accepted'])
 
     def test_new_advisory_in_known_package_blocks(self):
-        self.audit['vulnerabilities']['braces']['via'][0]['url'] = 'https://example.com/new-advisory'
+        self.audit['vulnerabilities']['unexpected-package'] = {
+            'severity': 'moderate',
+            'nodes': ['node_modules/unexpected-package'],
+            'via': [{'url': 'https://example.com/new-advisory', 'severity': 'moderate'}],
+        }
+        self.audit['metadata']['vulnerabilities']['moderate'] = 1
+        self.audit['metadata']['vulnerabilities']['total'] = 1
         self.assertFalse(self.decision()['accepted'])
 
-    def test_changed_dependency_version_blocks(self):
-        self.lock['packages']['node_modules/braces']['version'] = '3.0.4'
-        self.assertFalse(self.decision()['accepted'])
+    def test_audit_failure_exit_code_blocks_even_if_report_is_clean(self):
+        self.assertFalse(self.decision(raw_codes=[1, 0])['accepted'])
 
     def test_production_finding_blocks(self):
-        self.assertFalse(self.decision(production=copy.deepcopy(self.audit), raw_codes=[1, 1])['accepted'])
-
-    def test_expired_exception_blocks(self):
-        self.assertFalse(self.decision(today=date(2026, 10, 26))['accepted'])
+        production = copy.deepcopy(self.audit)
+        production['vulnerabilities']['unexpected-package'] = {
+            'severity': 'moderate',
+            'nodes': ['node_modules/unexpected-package'],
+            'via': [{'url': 'https://example.com/advisory', 'severity': 'moderate'}],
+        }
+        production['metadata']['vulnerabilities']['moderate'] = 1
+        production['metadata']['vulnerabilities']['total'] = 1
+        self.assertFalse(self.decision(production=production, raw_codes=[0, 1])['accepted'])
 
     def test_network_or_invalid_report_blocks(self):
         self.assertFalse(self.decision(audit={})['accepted'])

@@ -133,7 +133,11 @@ back/ETL/test_data/
 back/ETL/test_data/*
 !back/ETL/test_data/multi_universidad_primera_carga.csv
 !back/ETL/test_data/multi_universidad_actualizacion.csv
-quality/evidencias/
+quality/evidencias/*
+!quality/evidencias/e01/
+quality/evidencias/e01/*
+!quality/evidencias/e01/npm-audit-despues.json
+!quality/evidencias/e01/npm-audit-produccion.json
 quality/entrega/
 .vercel
 .env*

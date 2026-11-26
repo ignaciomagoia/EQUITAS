@@ -62,7 +62,11 @@ def evaluate(audit, production, lock, policy, raw_codes, today=None):
         'expires_on': policy['expires_on'],
         'raw_exit_codes': dict(zip(('all', 'production'), raw_codes, strict=True)),
         'evaluated_at_utc': datetime.now(UTC).isoformat(),
-        'meaning': 'Reviewed temporary exception; findings remain open. No production findings allowed.',
+        'meaning': (
+            'No active exception; all audit reports are clean.'
+            if not findings
+            else 'Reviewed temporary exception; findings remain open. No production findings allowed.'
+        ),
     }
 
 
