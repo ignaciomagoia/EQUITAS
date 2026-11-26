@@ -6,6 +6,7 @@ import {
   stringifyUnknownValue,
 } from '@/lib/parsers/generic-value-selector'
 import { createBrowserSupabaseClient } from '@/lib/supabase-browser'
+import type { SupabaseSource } from '@/lib/supabase-config'
 import type { RawRow } from '@/types/equitas-domain'
 
 type AuthValidationErrorCode =
@@ -167,8 +168,12 @@ export function mapAuthErrorMessage(error: AuthError | { message: string } | nul
   return error.message
 }
 
-export async function signInWithPassword(email: string, password: string) {
-  const supabase = createBrowserSupabaseClient()
+export async function signInWithPassword(
+  email: string,
+  password: string,
+  source: SupabaseSource = 'legacy'
+) {
+  const supabase = createBrowserSupabaseClient(source)
 
   if (!supabase) {
     return {
@@ -183,8 +188,8 @@ export async function signInWithPassword(email: string, password: string) {
   return { error }
 }
 
-export async function signOutCurrentSession() {
-  const supabase = createBrowserSupabaseClient()
+export async function signOutCurrentSession(source: SupabaseSource = 'legacy') {
+  const supabase = createBrowserSupabaseClient(source)
 
   if (!supabase) {
     return
@@ -193,9 +198,7 @@ export async function signOutCurrentSession() {
   await supabase.auth.signOut()
 }
 
-export async function getCurrentAuthUser() {
-  const supabase = createBrowserSupabaseClient()
-
+async function getAuthUserFromClient(supabase: SupabaseClient | null) {
   if (!supabase) {
     return null
   }
@@ -207,6 +210,10 @@ export async function getCurrentAuthUser() {
   }
 
   return data.user as User
+}
+
+export async function getCurrentAuthUser(source: SupabaseSource = 'legacy') {
+  return getAuthUserFromClient(createBrowserSupabaseClient(source))
 }
 
 export async function validateAuthUserTenantAccess(
@@ -305,8 +312,10 @@ export async function validateAuthUserTenantAccess(
   }
 }
 
-export async function validateCurrentUserTenantAccess(): Promise<TenantAccessValidation> {
-  const supabase = createBrowserSupabaseClient()
+export async function validateCurrentUserTenantAccess(
+  source: SupabaseSource = 'legacy'
+): Promise<TenantAccessValidation> {
+  const supabase = createBrowserSupabaseClient(source)
 
   if (!supabase) {
     return {
@@ -317,7 +326,7 @@ export async function validateCurrentUserTenantAccess(): Promise<TenantAccessVal
     }
   }
 
-  const authUser = await getCurrentAuthUser()
+  const authUser = await getAuthUserFromClient(supabase)
 
   if (!authUser) {
     return {
@@ -328,5 +337,5 @@ export async function validateCurrentUserTenantAccess(): Promise<TenantAccessVal
     }
   }
 
-  return validateAuthUserTenantAccess(authUser.id)
+  return validateAuthUserTenantAccess(authUser.id, supabase)
 }

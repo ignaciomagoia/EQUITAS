@@ -2,21 +2,24 @@ import { createServerClient } from '@supabase/ssr'
 import { NextResponse, type NextRequest } from 'next/server'
 
 import {
-  hasSupabaseCredentials,
-  supabasePublishableKey,
-  supabaseUrl,
+  getSupabasePublicConfiguration,
 } from '@/lib/supabase-config'
+import { EQUITAS_AUTH_SOURCE_COOKIE, isSupabaseSource } from '@/lib/auth/auth-source'
 
 export async function proxy(request: NextRequest) {
   let response = NextResponse.next({
     request,
   })
 
-  if (!hasSupabaseCredentials) {
+  const sourceCookie = request.cookies.get(EQUITAS_AUTH_SOURCE_COOKIE)?.value
+  const source = isSupabaseSource(sourceCookie) ? sourceCookie : 'legacy'
+  const configuration = getSupabasePublicConfiguration(source)
+
+  if (!configuration.configured) {
     return response
   }
 
-  const supabase = createServerClient(supabaseUrl, supabasePublishableKey, {
+  const supabase = createServerClient(configuration.url, configuration.publishableKey, {
     cookies: {
       getAll() {
         return request.cookies.getAll()

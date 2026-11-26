@@ -1,0 +1,3 @@
+Cuenta universitaria;Comprobante de deuda;Capital;Saldo actualizado;Concepto;Documento;Nombre completo;Correo institucional;Fecha de vencimiento;Columna ajena
+ALU-2026-001;ARANCEL-2026-03;15000,00;15000,00;Arancel marzo;90000001;Estudiante ficticio Uno;estudiante.uno@example.test;2026-03-15;ignorar
+ALU-2026-002;BIBLIOTECA-2026-01;2500,00;2500,00;Prestamo biblioteca;90000002;Estudiante ficticio Dos;estudiante.dos@example.test;2026-03-20;ignorar

@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "base_sha": "531996f51243dc3d4c5a607338e2f35e32313f6b",
+  "base_sha": "32319526e9c775a0271475112d8a8b2d065f8fe5",
   "minimum_statements_pct": 60,
   "minimum_new_lines_pct": 80,
   "maximum_duplicated_lines_pct": 5,

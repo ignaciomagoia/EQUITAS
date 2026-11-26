@@ -5,6 +5,12 @@ type DashboardMapperInput = {
   debtStatusBuckets: Map<string, number>
 }
 
+function isOperationalPriorityCase(debtor: DebtorListItem) {
+  // El nivel ALTA se conserva para segmentar desde 105. El card ejecutivo
+  // tambien representa casos accionables desde 100 o con recomendacion urgente.
+  return debtor.priorityScore >= 100 || debtor.isUrgentRecommendation
+}
+
 function buildTopDebtChart(debtors: DebtorListItem[]) {
   return [...debtors]
     .sort((a, b) => b.totalDebt - a.totalDebt)
@@ -112,7 +118,7 @@ export function mapDashboardMetricsFromDebtorObjects({
     overdueCases: debtors.filter((debtor) => debtor.overdueDebt > 0).length,
     withContactCases: debtors.filter((debtor) => debtor.hasContact).length,
     withoutContactCases: debtors.filter((debtor) => !debtor.hasContact).length,
-    priorityCases: debtors.filter((debtor) => debtor.priorityLevel === 'ALTA').length,
+    priorityCases: debtors.filter(isOperationalPriorityCase).length,
     urgentRecommendationCases: debtors.filter((debtor) => debtor.isUrgentRecommendation).length,
     criticalCasesToday: criticalDebtors.length,
     riskAboveNinetyCases,

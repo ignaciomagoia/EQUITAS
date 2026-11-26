@@ -3,19 +3,24 @@ import { createClient } from '@supabase/supabase-js'
 import { cookies } from 'next/headers'
 
 import {
-  hasSupabaseCredentials,
-  supabasePublishableKey,
-  supabaseUrl,
+  getSupabasePublicConfiguration,
+  type SupabaseSource,
 } from '@/lib/supabase-config'
+import { getCurrentSupabaseSource } from '@/lib/auth/auth-source-server'
 
-export async function createServerSupabaseClient() {
-  if (!hasSupabaseCredentials) {
+export { getCurrentSupabaseSource } from '@/lib/auth/auth-source-server'
+
+export async function createServerSupabaseClient(source?: SupabaseSource) {
+  const resolvedSource = source ?? (await getCurrentSupabaseSource())
+  const configuration = getSupabasePublicConfiguration(resolvedSource)
+
+  if (!configuration.configured) {
     return null
   }
 
   const cookieStore = await cookies()
 
-  return createServerClient(supabaseUrl, supabasePublishableKey, {
+  return createServerClient(configuration.url, configuration.publishableKey, {
     cookies: {
       getAll() {
         return cookieStore.getAll()
@@ -33,17 +38,30 @@ export async function createServerSupabaseClient() {
   })
 }
 
-export function createServerAdminSupabaseClient() {
-  const serviceRoleKey = (process.env.SUPABASE_SERVICE_ROLE_KEY ?? '').trim()
+export function createServerAdminSupabaseClient(source: SupabaseSource = 'legacy') {
+  const configuration = getSupabasePublicConfiguration(source)
+  const serviceRoleKey = (
+    source === 'multi'
+      ? process.env.MULTI_SUPABASE_SERVICE_ROLE_KEY ?? ''
+      : process.env.SUPABASE_SERVICE_ROLE_KEY ?? ''
+  ).trim()
 
-  if (!hasSupabaseCredentials || !serviceRoleKey) {
+  if (!configuration.configured || !serviceRoleKey) {
     return null
   }
 
-  return createClient(supabaseUrl, serviceRoleKey, {
+  return createClient(configuration.url, serviceRoleKey, {
     auth: {
       autoRefreshToken: false,
       persistSession: false,
     },
   })
+}
+
+export function createLegacyServerAdminSupabaseClient() {
+  return createServerAdminSupabaseClient('legacy')
+}
+
+export function createMultiServerAdminSupabaseClient() {
+  return createServerAdminSupabaseClient('multi')
 }

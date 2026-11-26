@@ -17,6 +17,7 @@ import {
 } from 'lucide-react'
 
 import { AuthGuard } from '@/components/auth/auth-guard'
+import { useAuthState } from '@/components/auth/auth-provider'
 import { LogoutButton } from '@/components/layout/logout-button'
 import { cn } from '@/lib/utils'
 
@@ -54,6 +55,8 @@ const NAV_SECTIONS: NavigationSection[] = [
 
 function SideNavigation() {
   const pathname = usePathname()
+  const { source, tenant } = useAuthState()
+  const navigationSections = NAV_SECTIONS
 
   return (
     <aside className="hidden w-72 flex-col border-r border-[#0b2646] bg-[#0f2f57] text-slate-200 md:flex">
@@ -68,12 +71,14 @@ function SideNavigation() {
         />
         <div>
           <p className="text-base font-semibold tracking-wide text-white">EQUITAS</p>
-          <p className="text-[11px] text-slate-300">Recupero municipal</p>
+          <p className="text-[11px] text-slate-300">
+            {source === 'multi' ? tenant?.name ?? 'Gestión institucional' : 'Recupero municipal'}
+          </p>
         </div>
       </div>
 
       <nav className="flex-1 space-y-3 px-3 py-3">
-        {NAV_SECTIONS.map((section) => (
+        {navigationSections.map((section) => (
           <section key={section.label} className="space-y-1.5">
             <div className="px-2">
               <p className="text-[11px] font-semibold tracking-[0.18em] text-slate-400">
@@ -133,6 +138,7 @@ function SideNavigation() {
 
 function TopBar() {
   const pathname = usePathname()
+  const navigationItems = NAV_SECTIONS.flatMap((section) => section.items)
 
   return (
     <header className="sticky top-0 z-20 border-b border-slate-200 bg-white/95 backdrop-blur md:hidden">
@@ -153,7 +159,7 @@ function TopBar() {
       </div>
 
       <div className="flex gap-2 overflow-x-auto px-4 pb-3">
-        {NAV_SECTIONS.flatMap((section) => section.items).map((item) => {
+        {navigationItems.map((item) => {
           if (!item.href) {
             return null
           }

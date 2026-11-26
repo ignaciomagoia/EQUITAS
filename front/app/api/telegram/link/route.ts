@@ -17,7 +17,8 @@ function jsonError(message: string, status: number) {
 }
 
 export async function POST(request: Request) {
-  const sessionClient = await createServerSupabaseClient()
+  // Los enlaces de Telegram existentes se mantienen aislados en La Falda.
+  const sessionClient = await createServerSupabaseClient('legacy')
 
   if (!sessionClient) {
     return jsonError('Supabase no esta configurado.', 503)

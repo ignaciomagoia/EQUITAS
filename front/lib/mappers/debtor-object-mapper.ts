@@ -525,6 +525,7 @@ export function mapDebtorObjectsFromRawData(raw: RawDebtorDataBundle): MappedDeb
         'account_number',
         'domain',
         'external_id',
+        'external_reference',
         'name',
       ]) || `OBJ-${id}`
     const description =

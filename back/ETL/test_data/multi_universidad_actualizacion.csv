@@ -1,0 +1,4 @@
+Observacion interna,Fecha de vencimiento,Correo institucional,Importe actual,Titular,Id deuda,Referencia objeto,Documento,Importe original,Descripcion,Columna adicional A,Origen planilla,Campo irrelevante
+no usar,2026-03-15,estudiante.uno@example.test,16000.00,Estudiante ficticio Uno,ARANCEL-2026-03,ALU-2026-001,90000001,15000.00,Arancel marzo,ignorar,actualizacion,ignorar
+no usar,2026-03-20,estudiante.dos@example.test,2500.00,Estudiante ficticio Dos,BIBLIOTECA-2026-01,ALU-2026-002,90000002,2500.00,Prestamo biblioteca,ignorar,actualizacion,ignorar
+no usar,2026-04-10,estudiante.tres@example.test,9000.00,Estudiante ficticio Tres,LABORATORIO-2026-01,ALU-2026-003,90000003,9000.00,Uso de laboratorio,ignorar,actualizacion,ignorar

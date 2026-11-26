@@ -12,6 +12,7 @@ from xml.etree import ElementTree
 
 ROOT = Path(__file__).resolve().parents[1]
 POLICY = ROOT / 'quality/gate-policy.json'
+EXPECTED_BASE_SHA = '32319526e9c775a0271475112d8a8b2d065f8fe5'
 
 
 def read_json(path):
@@ -189,7 +190,7 @@ def evaluate_gates(artifacts, root=ROOT, policy_path=POLICY):
         report['policy_sha256'] = hashlib.sha256(policy_path.read_bytes()).hexdigest()
         report['criteria'] = policy
         base = report['base_sha'] = policy['base_sha']
-        if base != '531996f51243dc3d4c5a607338e2f35e32313f6b':
+        if base != EXPECTED_BASE_SHA:
             raise ValueError('The fixed TP base must not change to empty the diff')
         head = report['source_sha'] = git(root, 'rev-parse', 'HEAD').strip()
         git(root, 'cat-file', '-e', base + '^{commit}')

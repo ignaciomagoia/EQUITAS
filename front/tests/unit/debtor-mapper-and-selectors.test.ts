@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import { mapDebtorObjectsFromRawData } from '@/lib/mappers/debtor-object-mapper'
+import { mapDashboardMetricsFromDebtorObjects } from '@/lib/mappers/dashboard-metrics-mapper'
 import {
   buildDebtAgingSummary,
   getNoContactCases,
@@ -117,6 +118,29 @@ describe('mapeador de objetos de deuda', () => {
       peopleCount: 2,
       hasContact: true,
     })
+  })
+
+  it('muestra la referencia institucional cuando no existe un codigo propio del objeto', () => {
+    const raw = buildRawData()
+    raw.debtors = [{ id: 1, external_reference: 'ALU-2026-001', object_type_id: 6 }]
+
+    const mapped = mapDebtorObjectsFromRawData(raw)
+
+    expect(mapped.debtors[0]?.identifier).toBe('ALU-2026-001')
+  })
+})
+
+describe('metricas ejecutivas', () => {
+  it('cuenta como prioritarios los casos con puntaje 100 o recomendacion urgente', () => {
+    const debtors = [
+      buildDebtor({ id: '100', priorityScore: 100, priorityLevel: 'MEDIA', isUrgentRecommendation: false }),
+      buildDebtor({ id: 'urgent', priorityScore: 80, priorityLevel: 'MEDIA', isUrgentRecommendation: true }),
+      buildDebtor({ id: 'regular', priorityScore: 99, priorityLevel: 'MEDIA', isUrgentRecommendation: false }),
+    ]
+
+    const dashboard = mapDashboardMetricsFromDebtorObjects({ debtors, debtStatusBuckets: new Map() })
+
+    expect(dashboard.priorityCases).toBe(2)
   })
 })
 

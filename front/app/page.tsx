@@ -29,6 +29,7 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { getDashboardData } from '@/lib/equitas-data'
+import { getCurrentSupabaseSource } from '@/lib/auth/auth-source-server'
 import {
   RECOMMENDATION_BADGE_VARIANT,
   RECOMMENDATION_KINDS,
@@ -38,7 +39,8 @@ import { cn, formatCurrency } from '@/lib/utils'
 export const dynamic = 'force-dynamic'
 
 export default async function HomePage() {
-  const { dashboard, warnings } = await getDashboardData()
+  const [source, data] = await Promise.all([getCurrentSupabaseSource(), getDashboardData()])
+  const { dashboard, warnings } = data
   const riskMap = new Map(dashboard.byRisk.map((item) => [item.label, item.value]))
   const highRiskShare =
     dashboard.totalDebtors > 0
@@ -65,7 +67,9 @@ export default async function HomePage() {
             Dashboard ejecutivo
           </h1>
           <p className="text-sm text-slate-600">
-            Resumen municipal para decidir prioridades de gestion diaria.
+            {source === 'multi'
+              ? 'Resumen institucional para decidir prioridades de gestión diaria.'
+              : 'Resumen municipal para decidir prioridades de gestión diaria.'}
           </p>
         </div>
       </section>
@@ -170,7 +174,7 @@ export default async function HomePage() {
                       <TableCell>
                         <div className="font-medium text-slate-900">{debtor.identifier}</div>
                         <p className="text-xs text-slate-500">
-                          {debtor.type} · Score {debtor.priorityScore}
+                          {debtor.type} · Prioridad {debtor.priorityScore}
                         </p>
                       </TableCell>
                       <TableCell>
