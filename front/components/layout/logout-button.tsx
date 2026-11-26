@@ -7,6 +7,7 @@ import { LogOut } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
 import { signOutCurrentSession } from '@/lib/services/auth-service'
+import { useAuthState } from '@/components/auth/auth-provider'
 import { cn } from '@/lib/utils'
 
 type LogoutButtonProps = {
@@ -19,11 +20,13 @@ export function LogoutButton({
   variant = 'outline',
 }: LogoutButtonProps) {
   const router = useRouter()
+  const { source } = useAuthState()
   const [isLoading, setIsLoading] = useState(false)
 
   async function handleLogout() {
     setIsLoading(true)
-    await signOutCurrentSession()
+    await signOutCurrentSession(source)
+    await fetch('/api/auth/source', { method: 'DELETE' })
     router.replace('/login')
     router.refresh()
   }

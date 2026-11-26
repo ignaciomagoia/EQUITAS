@@ -4,6 +4,11 @@ import {
 } from '@/lib/data/paginated-table-reader'
 import { EQUITAS_TABLE_NAMES } from '@/lib/data/table-names'
 import { createServerSupabaseClient } from '@/lib/supabase-server'
+import { getCurrentSupabaseSource } from '@/lib/auth/auth-source-server'
+import {
+  loadMultiRawDebtorData,
+  loadMultiRawDebtorDetailData,
+} from '@/lib/data/multiinstitution-raw-loader'
 import type { DataWarning, RawDebtorDataBundle, RawRow } from '@/types/equitas-domain'
 
 type RawDebtorDataOptions = {
@@ -39,6 +44,10 @@ export async function loadRawDebtorData({
   includeDebtDetails = true,
   includeRelationships = true,
 }: RawDebtorDataOptions = {}): Promise<RawDebtorDataBundle> {
+  if ((await getCurrentSupabaseSource()) === 'multi') {
+    return loadMultiRawDebtorData({ includeDebtDetails, includeRelationships })
+  }
+
   const supabase = await createServerSupabaseClient()
   const tables = [
     EQUITAS_TABLE_NAMES.debtor,
@@ -76,6 +85,10 @@ export async function loadRawDebtorData({
 
 // Carga solamente las filas necesarias para un objeto. Evita descargar todo el padron para abrir su detalle.
 export async function loadRawDebtorDetailData(debtorId: string): Promise<RawDebtorDataBundle> {
+  if ((await getCurrentSupabaseSource()) === 'multi') {
+    return loadMultiRawDebtorDetailData(debtorId)
+  }
+
   const supabase = await createServerSupabaseClient()
   const [debtorResult, debtorTypesResult, debtsResult, debtStatusesResult, debtorPeopleResult, profileResult] =
     await Promise.all([

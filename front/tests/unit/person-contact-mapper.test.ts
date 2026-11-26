@@ -57,6 +57,19 @@ describe('mensaje asistido de WhatsApp', () => {
     expect(url).toContain('https://wa.me/5493415550102?text=')
     expect(url).toContain(encodeURIComponent('Hola Ana Perez.'))
   })
+
+  it('usa la institucion activa en Multiinstitucion sin cambiar el texto legado por defecto', () => {
+    const message = buildWhatsAppMessage({
+      personName: 'Ana Perez',
+      totalDebtAssociated: 150000,
+      debtorIdentifiers: ['ALU-2026-001'],
+      institutionName: 'Universidad Demo',
+    })
+
+    expect(message).toContain('ALU-2026-001')
+    expect(message).toContain('comuniquese con Universidad Demo.')
+    expect(message).not.toContain('municipalidad')
+  })
 })
 
 describe('correo asistido', () => {
@@ -74,5 +87,19 @@ describe('correo asistido', () => {
     expect(message).toContain('AG-1001')
     expect(url).toContain('mailto:ana@example.test?subject=')
     expect(url).toContain(encodeURIComponent(subject))
+  })
+
+  it('personaliza asunto, firma y texto para la institucion activa', () => {
+    const message = buildEmailMessage({
+      personName: 'Ana Perez',
+      totalDebtAssociated: 150000,
+      debtorIdentifiers: ['ALU-2026-001'],
+      institutionName: 'Universidad Demo',
+    })
+    const subject = buildEmailSubject('Universidad Demo')
+
+    expect(subject).toBe('Aviso informativo sobre obligaciones - Universidad Demo')
+    expect(message).toContain('comuniquese con Universidad Demo.')
+    expect(message).toMatch(/\nUniversidad Demo$/)
   })
 })

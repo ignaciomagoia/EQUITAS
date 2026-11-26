@@ -127,5 +127,13 @@ original_conversation_*.json
 *.ndjson
 *.jsonl
 back/ETL/test_data/
+# Los únicos CSV versionados son fixtures ficticios de Multiinstitución. Los
+# archivos municipales y toda otra evidencia generada permanecen ignorados.
+!back/ETL/test_data/
+back/ETL/test_data/*
+!back/ETL/test_data/multi_universidad_primera_carga.csv
+!back/ETL/test_data/multi_universidad_actualizacion.csv
 quality/evidencias/
 quality/entrega/
+.vercel
+.env*

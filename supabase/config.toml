@@ -1,5 +1,8 @@
-# Configuracion LOCAL reproducible; no modifica los ajustes del proyecto cloud.
-project_id = "equitas-tp-testing"
+# Configuracion LOCAL reproducible; no enlaza ni modifica ningun proyecto cloud.
+# Se separa del antiguo nombre EQUITAS-TP-TESTING antes de su conversion a
+# Multiinstitucion. No ejecutar `supabase link` hasta verificar manualmente el
+# destino remoto correcto.
+project_id = "equitas-multiinstitution-local"
 
 [api]
 enabled = true

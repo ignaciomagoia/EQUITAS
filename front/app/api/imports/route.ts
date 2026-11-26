@@ -32,8 +32,9 @@ function sanitizeFileName(value: string) {
 }
 
 async function getImportContext() {
-  const sessionClient = await createServerSupabaseClient()
-  const adminClient = createServerAdminSupabaseClient()
+  // La importacion automatica actual pertenece exclusivamente al entorno legado de La Falda.
+  const sessionClient = await createServerSupabaseClient('legacy')
+  const adminClient = createServerAdminSupabaseClient('legacy')
   const enabledTenantId = getLafaldaImportTenantId()
 
   if (!sessionClient || !adminClient) {

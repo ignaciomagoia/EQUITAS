@@ -5,6 +5,7 @@ import { useEffect, useId, useState } from 'react'
 
 import { badgeVariants } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { useAuthState } from '@/components/auth/auth-provider'
 import { cn, formatCurrency } from '@/lib/utils'
 import type { PersonContactItem } from '@/types/equitas-domain'
 
@@ -21,6 +22,13 @@ type CommunicationChannel = 'whatsapp' | 'email'
 type PreparedCommunication = {
   channel: CommunicationChannel
   contact: PersonContactItem
+}
+
+type CommunicationMessageData = Pick<
+  PersonContactDialogProps,
+  'personName' | 'totalDebtAssociated' | 'debtorIdentifiers'
+> & {
+  institutionName?: string
 }
 
 type CopyTarget = 'subject' | 'message' | 'telegram'
@@ -63,11 +71,11 @@ function normalizeWhatsAppRecipient(value: string) {
   return `549${digits}`
 }
 
-function buildDebtorSummary(debtorIdentifiers: string[]) {
+function buildDebtorSummary(debtorIdentifiers: string[], institutionName?: string) {
   const visibleDebtors = debtorIdentifiers.slice(0, 3)
 
   if (visibleDebtors.length === 0) {
-    return 'sus obligaciones municipales'
+    return institutionName ? 'sus obligaciones registradas' : 'sus obligaciones municipales'
   }
 
   return (
@@ -86,14 +94,17 @@ export function buildWhatsAppMessage({
   personName,
   totalDebtAssociated,
   debtorIdentifiers,
-}: Pick<PersonContactDialogProps, 'personName' | 'totalDebtAssociated' | 'debtorIdentifiers'>) {
+  institutionName,
+}: CommunicationMessageData) {
+  const institutionReference = institutionName?.trim() || 'la municipalidad'
+
   return [
     `Hola ${personName}.`,
     '',
-    `Le informamos que registra un saldo pendiente asociado a ${buildDebtorSummary(debtorIdentifiers)}.`,
+    `Le informamos que registra un saldo pendiente asociado a ${buildDebtorSummary(debtorIdentifiers, institutionName)}.`,
     `Saldo total informado: ${formatCurrency(totalDebtAssociated)}.`,
     '',
-    'Esta comunicacion es informativa. Para consultar el detalle o las alternativas de regularizacion, comuniquese con la municipalidad.',
+    `Esta comunicacion es informativa. Para consultar el detalle o las alternativas de regularizacion, comuniquese con ${institutionReference}.`,
   ].join('\n')
 }
 
@@ -107,24 +118,32 @@ export function buildWhatsAppUrl(recipient: string, message: string) {
   return `https://wa.me/${normalizedRecipient}?text=${encodeURIComponent(message)}`
 }
 
-export function buildEmailSubject() {
-  return 'Aviso informativo sobre obligaciones municipales'
+export function buildEmailSubject(institutionName?: string) {
+  const normalizedInstitutionName = institutionName?.trim()
+
+  return normalizedInstitutionName
+    ? `Aviso informativo sobre obligaciones - ${normalizedInstitutionName}`
+    : 'Aviso informativo sobre obligaciones municipales'
 }
 
 export function buildEmailMessage({
   personName,
   totalDebtAssociated,
   debtorIdentifiers,
-}: Pick<PersonContactDialogProps, 'personName' | 'totalDebtAssociated' | 'debtorIdentifiers'>) {
+  institutionName,
+}: CommunicationMessageData) {
+  const institutionReference = institutionName?.trim() || 'la municipalidad'
+  const signature = institutionName?.trim() || 'Municipalidad'
+
   return [
     `Hola ${personName},`,
     '',
-    `Le informamos que registra un saldo pendiente asociado a ${buildDebtorSummary(debtorIdentifiers)}.`,
+    `Le informamos que registra un saldo pendiente asociado a ${buildDebtorSummary(debtorIdentifiers, institutionName)}.`,
     `Saldo total informado: ${formatCurrency(totalDebtAssociated)}.`,
     '',
-    'Esta comunicacion es informativa. Para consultar el detalle o las alternativas de regularizacion, comuniquese con la municipalidad.',
+    `Esta comunicacion es informativa. Para consultar el detalle o las alternativas de regularizacion, comuniquese con ${institutionReference}.`,
     '',
-    'Municipalidad',
+    signature,
   ].join('\n')
 }
 
@@ -145,6 +164,7 @@ export function PersonContactDialog({
   totalDebtAssociated,
   debtorIdentifiers,
 }: PersonContactDialogProps) {
+  const { source, tenant } = useAuthState()
   const [isOpen, setIsOpen] = useState(false)
   const [preparedCommunication, setPreparedCommunication] = useState<PreparedCommunication | null>(null)
   const [subject, setSubject] = useState('')
@@ -155,6 +175,8 @@ export function PersonContactDialog({
   const [copiedTarget, setCopiedTarget] = useState<CopyTarget | null>(null)
   const [copyError, setCopyError] = useState(false)
   const titleId = useId()
+  const institutionName = source === 'multi' ? tenant?.name : undefined
+  const isTelegramAvailable = source === 'legacy'
 
   const closeDialog = () => {
     setPreparedCommunication(null)
@@ -166,7 +188,12 @@ export function PersonContactDialog({
   }
 
   const prepareCommunication = (channel: CommunicationChannel, contact: PersonContactItem) => {
-    const communicationData = { personName, totalDebtAssociated, debtorIdentifiers }
+    const communicationData = {
+      personName,
+      totalDebtAssociated,
+      debtorIdentifiers,
+      institutionName,
+    }
 
     setPreparedCommunication({ channel, contact })
     setCopiedTarget(null)
@@ -178,9 +205,11 @@ export function PersonContactDialog({
         : buildEmailMessage(communicationData)
 
     setMessage(
-      telegramLink ? `${baseMessage}\n\n${buildTelegramInvitation(telegramLink)}` : baseMessage
+      isTelegramAvailable && telegramLink
+        ? `${baseMessage}\n\n${buildTelegramInvitation(telegramLink)}`
+        : baseMessage
     )
-    setSubject(channel === 'email' ? buildEmailSubject() : '')
+    setSubject(channel === 'email' ? buildEmailSubject(institutionName) : '')
   }
 
   const addTelegramLink = async () => {
@@ -343,6 +372,7 @@ export function PersonContactDialog({
                   rows={8}
                   className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800 outline-none focus:border-[#163a63] focus:ring-2 focus:ring-[#163a63]/20"
                 />
+                {isTelegramAvailable && (
                 <div className="rounded-md border border-[#cfdaea] bg-[#edf2f9] p-3">
                   <p className="text-sm font-medium text-[#163a63]">Asistente de Telegram</p>
                   <p className="mt-1 text-xs text-slate-600">
@@ -379,6 +409,7 @@ export function PersonContactDialog({
                     <p className="mt-2 text-xs text-[#8f3434]">{telegramLinkError}</p>
                   )}
                 </div>
+                )}
                 {preparedCommunication.channel === 'email' && (
                   <div className="flex flex-wrap gap-2">
                     <Button
@@ -491,6 +522,7 @@ export function PersonContactDialog({
                   )
                   })}
                 </ul>
+                {isTelegramAvailable && (
                 <div className="rounded-md border border-[#cfdaea] bg-[#edf2f9] p-3">
                   <p className="text-sm font-medium text-[#163a63]">Asistente de Telegram</p>
                   <p className="mt-1 text-xs text-slate-600">
@@ -538,6 +570,7 @@ export function PersonContactDialog({
                     <p className="mt-2 text-xs text-[#8f3434]">{telegramLinkError}</p>
                   )}
                 </div>
+                )}
               </div>
             )}
           </section>

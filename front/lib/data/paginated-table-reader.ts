@@ -1,6 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 
-import { hasSupabaseCredentials } from '@/lib/supabase-config'
+import { hasSupabaseCredentials, type SupabaseSource } from '@/lib/supabase-config'
 import type { DataWarning, RawRow } from '@/types/equitas-domain'
 
 const PAGE_SIZE = 1000
@@ -32,14 +32,15 @@ function validId(id: unknown): id is RowId {
 async function loadTableRows(
   table: string,
   supabase: SupabaseClient | null,
-  filters: TableFilters = {}
+  filters: TableFilters = {},
+  source: SupabaseSource = 'legacy'
 ): Promise<ReadResult> {
-  if (!supabase || !hasSupabaseCredentials) {
+  if (!supabase || (source === 'legacy' && !hasSupabaseCredentials)) {
     return {
       rows: [],
       warning: {
         table,
-        message: 'Credenciales de Supabase no configuradas (NEXT_PUBLIC_SUPABASE_URL y NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY).',
+        message: 'Credenciales de Supabase no configuradas para el proveedor seleccionado.',
         needsSelectPolicy: false,
       },
     }
@@ -82,19 +83,24 @@ async function loadTableRows(
 }
 
 // Las tablas de estas rutas tienen PK bigint id. Cada request conserva la sesion/RLS.
-export function loadAllTableRows(table: string, supabase: SupabaseClient | null) {
-  return loadTableRows(table, supabase)
+export function loadAllTableRows(
+  table: string,
+  supabase: SupabaseClient | null,
+  source: SupabaseSource = 'legacy'
+) {
+  return loadTableRows(table, supabase, {}, source)
 }
 
 // Variante acotada para vistas de detalle. Mantiene la paginacion aun cuando un objeto tenga muchas filas relacionadas.
 export function loadFilteredTableRows(
   table: string,
   filters: TableFilters,
-  supabase: SupabaseClient | null
+  supabase: SupabaseClient | null,
+  source: SupabaseSource = 'legacy'
 ) {
   if (Object.values(filters).some((value) => Array.isArray(value) && value.length === 0)) {
     return Promise.resolve<ReadResult>({ rows: [], warning: null })
   }
 
-  return loadTableRows(table, supabase, filters)
+  return loadTableRows(table, supabase, filters, source)
 }

@@ -59,6 +59,32 @@ describe('R-SEG-01 / E04: contrato aislado de autenticacion y pertenencia', () =
     expect(client.auth.signInWithPassword).toHaveBeenCalledWith({ email: 'test@example.test', password: 'test-only-password' })
   })
 
+  it('AUTH-02-M: utiliza explicitamente el cliente Multi al recibir ese proveedor', async () => {
+    const { client } = clientWithReplies([])
+    await signInWithPassword('admin@universidad-demo.example', 'test-only-password', 'multi')
+    expect(browserClient).toHaveBeenCalledWith('multi')
+    expect(client.auth.signInWithPassword).toHaveBeenCalledWith({
+      email: 'admin@universidad-demo.example',
+      password: 'test-only-password',
+    })
+  })
+
+  it('AUTH-06-M: conserva el cliente Multi para validar la sesion actual', async () => {
+    const { client, queries } = clientWithReplies([
+      ok([{ id: 42 }]),
+      ok([{ tenant: 7, role: 'operator' }]),
+    ])
+
+    expect(await validateCurrentUserTenantAccess('multi')).toMatchObject({
+      isAuthorized: true,
+      context: { authUserId: 'auth-test', appUserId: '42', tenantId: '7', role: 'operator' },
+    })
+    expect(browserClient).toHaveBeenCalledTimes(1)
+    expect(browserClient).toHaveBeenCalledWith('multi')
+    expect(client.auth.getUser).toHaveBeenCalledOnce()
+    expect(queries.map((query) => query.table)).toEqual(['user', 'tenant_user'])
+  })
+
   it('AUTH-03: solicita cerrar la sesion exactamente una vez', async () => {
     const { client } = clientWithReplies([])
     await signOutCurrentSession()

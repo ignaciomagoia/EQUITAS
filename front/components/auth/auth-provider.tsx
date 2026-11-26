@@ -13,6 +13,8 @@ import type { Session } from '@supabase/supabase-js'
 
 import { createBrowserSupabaseClient } from '@/lib/supabase-browser'
 import { validateAuthUserTenantAccess } from '@/lib/services/auth-service'
+import { validateMultiInstitutionAccess } from '@/lib/services/multi-auth-service'
+import type { SupabaseSource } from '@/lib/supabase-config'
 
 type AuthAppUser = {
   id: string
@@ -21,6 +23,7 @@ type AuthAppUser = {
 
 type AuthTenant = {
   id: string
+  name?: string
 }
 
 type AuthContextValue = {
@@ -28,6 +31,7 @@ type AuthContextValue = {
   appUser: AuthAppUser | null
   tenant: AuthTenant | null
   role: string | null
+  source: SupabaseSource
   isAuthenticated: boolean
   isAuthReady: boolean
   isRevalidating: boolean
@@ -46,7 +50,9 @@ function clearAccessState() {
 }
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const supabase = useMemo(() => createBrowserSupabaseClient(), [])
+  const [source, setSource] = useState<SupabaseSource>('legacy')
+  const [isSourceReady, setIsSourceReady] = useState(false)
+  const supabase = useMemo(() => createBrowserSupabaseClient(source), [source])
   const [session, setSession] = useState<Session | null>(null)
   const [appUser, setAppUser] = useState<AuthAppUser | null>(null)
   const [tenant, setTenant] = useState<AuthTenant | null>(null)
@@ -97,7 +103,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setIsRevalidating(true)
       }
 
-      const access = await validateAuthUserTenantAccess(nextSession.user.id)
+      const access =
+        source === 'multi'
+          ? await validateMultiInstitutionAccess(nextSession.user.id, supabase)
+          : await validateAuthUserTenantAccess(nextSession.user.id, supabase)
 
       if (!isMountedRef.current) {
         return
@@ -110,7 +119,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           id: access.context.appUserId,
           authUserId: access.context.authUserId,
         })
-        setTenant({ id: access.context.tenantId })
+        setTenant({ id: access.context.tenantId, name: 'institutionName' in access.context ? access.context.institutionName : undefined })
         setRole(access.context.role)
         setIsAuthenticated(true)
       } else {
@@ -124,7 +133,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setIsAuthReady(true)
       setIsRevalidating(false)
     },
-    [applyAnonymousState, supabase]
+    [applyAnonymousState, source, supabase]
   )
 
   const refreshAuthState = useCallback(async () => {
@@ -153,6 +162,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     let cancelled = false
+
+    if (!isSourceReady) {
+      return () => {
+        cancelled = true
+      }
+    }
 
     async function bootstrapAuth() {
       if (!supabase) {
@@ -195,7 +210,37 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       cancelled = true
       authSubscription?.unsubscribe()
     }
-  }, [applyAnonymousState, resolveAccessForSession, supabase])
+  }, [applyAnonymousState, isSourceReady, resolveAccessForSession, supabase])
+
+  useEffect(() => {
+    let cancelled = false
+
+    async function loadSelectedSource() {
+      try {
+        const response = await fetch('/api/auth/source', { cache: 'no-store' })
+        const payload = (await response.json()) as { source?: unknown }
+        const nextSource: SupabaseSource = payload.source === 'multi' ? 'multi' : 'legacy'
+
+        if (!cancelled) {
+          if (nextSource !== source) {
+            setIsAuthReady(false)
+            setSource(nextSource)
+          }
+          setIsSourceReady(true)
+        }
+      } catch {
+        // Sin marcador persistente se conserva el proveedor legado por compatibilidad.
+        if (!cancelled) {
+          setIsSourceReady(true)
+        }
+      }
+    }
+
+    void loadSelectedSource()
+    return () => {
+      cancelled = true
+    }
+  }, [source])
 
   const value = useMemo<AuthContextValue>(
     () => ({
@@ -203,6 +248,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       appUser,
       tenant,
       role,
+      source,
       isAuthenticated,
       isAuthReady,
       isRevalidating,
@@ -216,6 +262,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       refreshAuthState,
       role,
       session,
+      source,
       tenant,
     ]
   )

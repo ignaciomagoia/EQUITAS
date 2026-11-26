@@ -11,9 +11,45 @@ import {
   signOutCurrentSession,
   validateCurrentUserTenantAccess,
 } from '@/lib/services/auth-service'
+import { validateCurrentMultiInstitutionAccess } from '@/lib/services/multi-auth-service'
+import type { SupabaseSource } from '@/lib/supabase-config'
 
 type LoginFormProps = {
   nextPath: string
+}
+
+async function resolveLoginSource(email: string): Promise<SupabaseSource> {
+  const response = await fetch('/api/auth/resolve-provider', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email }),
+  })
+  const payload = (await response.json().catch(() => null)) as { source?: unknown; error?: string } | null
+
+  if (!response.ok || (payload?.source !== 'legacy' && payload?.source !== 'multi')) {
+    throw new Error(payload?.error ?? 'No se pudo resolver la plataforma de acceso.')
+  }
+
+  return payload.source
+}
+
+async function readSavedSource(): Promise<SupabaseSource> {
+  const response = await fetch('/api/auth/source', { cache: 'no-store' })
+  const payload = (await response.json().catch(() => null)) as { source?: unknown } | null
+  return payload?.source === 'multi' ? 'multi' : 'legacy'
+}
+
+async function persistAuthSource(source: SupabaseSource) {
+  const response = await fetch('/api/auth/source', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ source }),
+  })
+  const payload = (await response.json().catch(() => null)) as { error?: string } | null
+
+  if (!response.ok) {
+    throw new Error(payload?.error ?? 'No se pudo confirmar la sesion institucional.')
+  }
 }
 
 export function LoginForm({ nextPath }: LoginFormProps) {
@@ -28,7 +64,11 @@ export function LoginForm({ nextPath }: LoginFormProps) {
     let cancelled = false
 
     async function checkExistingSession() {
-      const result = await validateCurrentUserTenantAccess()
+      const source = await readSavedSource()
+      const result =
+        source === 'multi'
+          ? await validateCurrentMultiInstitutionAccess()
+          : await validateCurrentUserTenantAccess('legacy')
 
       if (cancelled) {
         return
@@ -54,7 +94,16 @@ export function LoginForm({ nextPath }: LoginFormProps) {
     setErrorMessage(null)
     setIsSubmitting(true)
 
-    const signInResult = await signInWithPassword(email.trim(), password)
+    let source: SupabaseSource
+    try {
+      source = await resolveLoginSource(email.trim())
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : 'No se pudo iniciar sesion.')
+      setIsSubmitting(false)
+      return
+    }
+
+    const signInResult = await signInWithPassword(email.trim(), password, source)
 
     if (signInResult.error) {
       setErrorMessage(mapAuthErrorMessage(signInResult.error))
@@ -62,10 +111,13 @@ export function LoginForm({ nextPath }: LoginFormProps) {
       return
     }
 
-    const access = await validateCurrentUserTenantAccess()
+    const access =
+      source === 'multi'
+        ? await validateCurrentMultiInstitutionAccess()
+        : await validateCurrentUserTenantAccess('legacy')
 
     if (!access.isAuthorized) {
-      await signOutCurrentSession()
+      await signOutCurrentSession(source)
       setErrorMessage(
         access.message ??
           'Tus credenciales son correctas, pero no tienes permisos activos para ingresar.'
@@ -74,9 +126,17 @@ export function LoginForm({ nextPath }: LoginFormProps) {
       return
     }
 
-    router.replace(nextPath)
-    router.refresh()
-    setIsSubmitting(false)
+    try {
+      await persistAuthSource(source)
+    } catch (error) {
+      await signOutCurrentSession(source)
+      setErrorMessage(error instanceof Error ? error.message : 'No se pudo confirmar la sesion.')
+      setIsSubmitting(false)
+      return
+    }
+
+    // Recarga el arbol de Server Components con el proveedor autenticado en la cookie HttpOnly.
+    window.location.assign(nextPath)
   }
 
   if (isCheckingSession) {
